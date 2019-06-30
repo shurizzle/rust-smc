@@ -1,340 +1,634 @@
-#![allow(non_camel_case_types)]
-#![allow(non_upper_case_globals)]
-#![allow(non_snake_case)]
-
 #[cfg(not(target_os = "macos"))]
 compile_error!("SMC only works on macOS");
 
 extern crate ctor;
-extern crate core_foundation;
+extern crate four_char_code;
 extern crate libc;
 
-use ctor::*;
-use core_foundation::dictionary::{ CFMutableDictionaryRef, CFDictionaryRef };
-use std::os::raw::{ c_void, c_char, c_uchar, c_int, c_uint };
-use std::sync::atomic::{ AtomicUsize, Ordering };
-use std::ffi::{ CString, CStr };
+mod conversions;
+mod sys;
 
-macro_rules! c_str {
-    ($lit:ident) => {
-        c_str!(stringify!($lit))
-    };
-    ($lit:expr) => {
-        concat!($lit, "\0").as_ptr() as *const ::std::os::raw::c_char
+use std::fmt;
+use std::os::raw::c_void;
+use std::sync::{
+    atomic::{AtomicPtr, Ordering},
+    Arc, Mutex,
+};
+use std::collections::HashMap;
+
+use self::{conversions::*, sys::*};
+
+use four_char_code::{four_char_code, FourCharCode};
+
+use libc::{sysctl, CTL_HW};
+
+#[derive(Default, Debug, Copy, Clone)]
+pub struct SMCBytes([u8; 32]); // 32
+
+// "ch8*", "char", "flag", "flt ", "fp1f", "fp6a", "fp79", "fp88", "fpe2", "hex_", "si16", "si8 ", "sp1e", "sp2d", "sp3c", "sp4b", "sp5a", "sp69", "sp78", "sp87", "ui16", "ui32", "ui8 ", "{alc", "{ali", "{alp", "{alv", "{fds", "{hdi", "{lim", "{lkb", "{lks", "{mss", "{rev"
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(C)]
+pub struct DataType {
+    pub id: FourCharCode,
+    pub size: u32,
+}
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C)]
+pub struct SMCKey {
+    pub code: FourCharCode,
+    pub info: DataType,
+}
+
+macro_rules! fcc_format {
+    ( $fmt:literal, $( $args:expr ),+ ) => {
+        Into::<FourCharCode>::into(format!($fmt, $($args),+))
     }
 }
 
-const KERNEL_INDEX_SMC: u32 = 2;
-
-const SMC_CMD_READ_BYTES: c_char = 5;
-const SMC_CMD_READ_KEYINFO: c_char = 9;
-
-const DATATYPE_FPE2: *const c_char = c_str!(fpe2);
-const DATATYPE_SP78: *const c_char = c_str!(sp78);
-
-const SMC_KEY_CPU_TEMP: *const c_char = c_str!(TC0P);
-const SMC_KEY_GPU_TEMP: *const c_char = c_str!(TG0P);
-
-type kern_return_t = c_int;
-type ipc_port_t = *const c_void;
-type mach_port_t = ipc_port_t;
-type io_object_t = mach_port_t;
-type io_connect_t = io_object_t;
-type io_iterator_t = io_object_t;
-type task_t = *const c_void;
-type task_port_t = task_t;
-type io_service_t = io_object_t;
-
-#[repr(C)]
-struct SMCKeyData_vers_t {
-    major: c_char,
-    minor: c_char,
-    build: c_char,
-    reserved: [c_char; 1],
-    release: u16,
+#[repr(u8)]
+enum SMCSelector {
+    HandleYPCEvent = 2,
+    ReadKey = 5,
+    WriteKey = 6,
+    GetKeyFromIndex = 8,
+    GetKeyInfo = 9,
 }
 
 #[repr(C)]
-struct SMCKeyData_pLimitData_t {
-    version: u16,
-    length: u16,
-    cpuPLimit: u32,
-    gpuPLimit: u32,
-    memPLimit: u32,
+struct SMCVersion {
+    // 6
+    major: u8,    // 1
+    minor: u8,    // 1
+    build: u8,    // 1
+    reserved: u8, // 1
+    release: u16, // 1
 }
 
 #[repr(C)]
-struct SMCKeyData_keyInfo_t {
-    dataSize: u32,
-    dataType: u32,
-    dataAttributes: c_char,
+struct SMCPLimitData {
+    // 16
+    version: u16,    // 2
+    length: u16,     // 2
+    cpu_plimit: u32, // 4
+    gpu_plimit: u32, // 4
+    mem_plimit: u32, // 4
 }
 
-type SMCBytes_t = [c_char; 32];
-
 #[repr(C)]
-struct SMCKeyData_t {
-    key: u32,
-    vers: SMCKeyData_vers_t,
-    pLimitData: SMCKeyData_pLimitData_t,
-    keyInfo: SMCKeyData_keyInfo_t,
-    result: c_char,
-    status: c_char,
-    data8: c_char,
-    data32: u32,
-    bytes: SMCBytes_t,
+struct SMCKeyInfoData {
+    // 9
+    data_size: u32,          // 4
+    data_type: FourCharCode, // 4
+    data_attributes: u8,     // 1
 }
 
-type UInt32Char_t = [c_char; 5];
-
 #[repr(C)]
-struct SMCVal_t {
-    key: UInt32Char_t,
-    dataSize: u32,
-    dataType: UInt32Char_t,
-    bytes: SMCBytes_t,
+struct SMCParam {
+    key: FourCharCode,           // 4
+    vers: SMCVersion,            // 6
+    p_limit_data: SMCPLimitData, // 16
+    key_info: SMCKeyInfoData,    // 9
+    result: u8,                  // 1
+    status: u8,                  // 1
+    selector: SMCSelector,       // 1
+    data32: u32,                 // 4
+    bytes: SMCBytes,             // 32
+}
+
+macro_rules! err_system {
+    ( $err:literal ) => {
+        (($err & 0x3f) << 26)
+    };
+}
+
+macro_rules! err_sub {
+    ( $err:literal ) => {
+        (($err & 0xfff) << 14)
+    };
+}
+
+const SYS_IOKIT: kern_return_t = err_system!(0x38);
+const SUB_IOKIT_COMMON: kern_return_t = err_sub!(0);
+
+macro_rules! iokit_common_err {
+    ( $err:literal ) => {
+        SYS_IOKIT | SUB_IOKIT_COMMON | $err
+    };
 }
 
 const KERN_SUCCESS: kern_return_t = 0;
+#[allow(non_upper_case_globals)]
 const kIOReturnSuccess: kern_return_t = KERN_SUCCESS;
+#[allow(non_upper_case_globals)]
+const kIOReturnNotPrivileged: kern_return_t = iokit_common_err!(0x2c1);
 
 const MACH_PORT_NULL: mach_port_t = 0 as mach_port_t;
+#[allow(non_upper_case_globals)]
 const kIOMasterPortDefault: mach_port_t = MACH_PORT_NULL;
 
-#[link(name = "IOKit", kind = "framework")]
-extern "C" {
-    fn mach_task_self() -> mach_port_t;
-    fn IOServiceMatching(name: *const c_char) -> CFMutableDictionaryRef;
-    fn IOServiceGetMatchingServices(masterPort: mach_port_t, matching: CFDictionaryRef, existing: *const io_iterator_t) -> kern_return_t;
-    fn IOIteratorNext(iterator: io_iterator_t) -> io_object_t;
-    fn IOObjectRelease(object: io_object_t) -> kern_return_t;
-    fn IOServiceOpen(service: io_service_t, owningTask: task_port_t, r#type: u32, connect: *const io_connect_t) -> kern_return_t;
-    fn IOServiceClose(connect: io_connect_t) -> kern_return_t;
-    fn IOConnectCallStructMethod(connection: mach_port_t, selector: u32, inputStruct: *const c_void, inputStructCnt: usize, outputStruct: *const c_void, outputStructCnt: *const usize) -> kern_return_t;
-}
+const TYPE_SP78: FourCharCode = four_char_code!("sp78");
 
-static CONN: AtomicUsize = AtomicUsize::new(0);
-
-#[ctor]
-fn ctor() {
-    unsafe {
-        let c = CONN.load(Ordering::SeqCst) as io_connect_t;
-        let mut result: kern_return_t;
-        let iterator: io_iterator_t = ::std::mem::zeroed();
-
-        let matching_dictionary = IOServiceMatching(c_str!(AppleSMC));
-        result = IOServiceGetMatchingServices(kIOMasterPortDefault, matching_dictionary, &iterator);
-        if result != kIOReturnSuccess {
-            panic!("Error: IOServiceGetMatchingServices()");
-        }
-
-        let device = IOIteratorNext(&*iterator);
-        IOObjectRelease(&*iterator);
-
-        if device.is_null() {
-            panic!("Error: no SMC found\n");
-        }
-
-        result = IOServiceOpen(&*device, mach_task_self(), 0, &c);
-        IOObjectRelease(&*device);
-        if result != kIOReturnSuccess {
-            panic!("Error: IOServiceOpen()");
-        }
-
-        CONN.swap(c as usize, Ordering::SeqCst);
-    }
-}
-
-#[dtor]
-fn dtor() {
-    let c = CONN.load(Ordering::SeqCst) as io_connect_t;
-    unsafe { IOServiceClose(c) };
-}
-
-fn _strtoul(str: *const c_char, size: c_int, base: c_int) -> u32 {
-    let mut total: u32 = 0;
-
-    for i in 0..size {
-        unsafe {
-            if base == 16 {
-                total += (*(((str as usize) + (i as usize)) as *const c_char) as u32) << (size - 1 - i) * 8;
-            } else {
-                total += (((*(((str as usize) + (i as usize)) as *const c_char) as u32) << (size - 1 - i) * 8) as c_uchar) as u32;
-            }
-        }
-    }
-
-    total
-}
-
-unsafe fn _ultostr(str: *mut c_char, val: u32) {
-    *str = 0;
-    libc::sprintf(str, c_str!("%c%c%c%c"),
-        (val >> 24) as c_uint,
-        (val >> 16) as c_uint,
-        (val >> 8) as c_uint,
-        val as c_uint);
-}
-
-unsafe fn smc_call(index: u32, input: &mut SMCKeyData_t, output: &mut SMCKeyData_t) -> kern_return_t {
-    let c = CONN.load(Ordering::SeqCst) as io_connect_t;
-    let input_size: usize = ::std::mem::size_of::<SMCKeyData_t>();
-    let output_size: usize = ::std::mem::size_of::<SMCKeyData_t>();
-
-    IOConnectCallStructMethod(c, index, input as *const SMCKeyData_t as *const c_void, input_size, output as *const SMCKeyData_t as *const c_void, &output_size)
-}
-
-unsafe fn read_key(key: *const c_char, val: &mut SMCVal_t) -> kern_return_t {
-    let mut result: kern_return_t;
-    let mut input: SMCKeyData_t = ::std::mem::zeroed();
-    let mut output: SMCKeyData_t = ::std::mem::zeroed();
-
-    input.key = _strtoul(key, 4, 16);
-    input.data8 = SMC_CMD_READ_KEYINFO;
-
-    result = smc_call(KERNEL_INDEX_SMC, &mut input, &mut output);
-
-    if result != kIOReturnSuccess {
-        return result;
-    }
-
-    val.dataSize = output.keyInfo.dataSize;
-    _ultostr(&mut val.dataType[0] as *mut c_char, output.keyInfo.dataType);
-    input.keyInfo.dataSize = val.dataSize;
-    input.data8 = SMC_CMD_READ_BYTES;
-
-    result = smc_call(KERNEL_INDEX_SMC, &mut input, &mut output);
-    if result != kIOReturnSuccess {
-        return result;
-    }
-
-    libc::memcpy(&mut val.bytes[0] as *mut c_char as *mut c_void, &mut output.bytes[0] as *mut c_char as *mut c_void, ::std::mem::size_of::<SMCBytes_t>());
-
-    kIOReturnSuccess
-}
-
-fn temperature(key: *const c_char) -> Option<f64> {
-    unsafe {
-        let mut val: SMCVal_t = ::std::mem::zeroed();
-
-        if read_key(key, &mut val) == kIOReturnSuccess {
-            if val.dataSize > 0 {
-                if libc::strcmp(&val.dataType[0] as *const c_char, DATATYPE_SP78) == 0 {
-                    let value: f64 = ((val.bytes[0] as c_int) * 256 + ((val.bytes[1] as c_uchar) as c_int)) as f64;
-                    return Some(value / 256.0);
-                }
-            }
-        }
-
-        None
-    }
-}
-
-fn fan_rpm(key: *const c_char) -> Option<f64> {
-    unsafe {
-        let mut val: SMCVal_t = ::std::mem::zeroed();
-
-        if read_key(key, &mut val) == kIOReturnSuccess {
-            if val.dataSize > 0 {
-                if libc::strcmp(&val.dataType[0] as *const c_char, DATATYPE_FPE2) == 0 {
-                    return Some((u16::from_be(*(&val.bytes[0] as *const i8 as *const u16)) as f64) / 4.0);
-                }
-            }
-        }
-
-        None
-    }
-}
-
-pub fn cpu_temp() -> f64 {
-    temperature(SMC_KEY_CPU_TEMP).unwrap()
-}
-
-pub fn gpu_temp() -> Option<f64> {
-    temperature(SMC_KEY_GPU_TEMP)
-}
-
-macro_rules! c_format {
-    ($($arg:tt)*) => {
-        CString::new(format!($($arg)*)).unwrap().into_raw()
-    }
-}
+const HW_PACKAGES: i32 = 125;
+const HW_PHYSICALCPU: i32 = 101;
 
 #[derive(Debug)]
-pub struct Fan {
-    pub name: String,
-    pub min_speed: f64,
-    pub actual_speed: f64,
-    pub max_speed: f64,
+pub enum SMCError {
+    DriverNotFound,
+    FailedToOpen,
+    KeyNotFound(FourCharCode),
+    NotPrivileged,
+    UnsafeFanSpeed,
+    Unknown(i32, u8),
+    Sysctl,
 }
 
-impl std::fmt::Display for Fan {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Fan \"{}\" at {} RPM ({}%)", self.name, self.rpm(), self.percent())
+impl SMCError {
+    pub fn code(&self) -> Option<FourCharCode> {
+        match self {
+            SMCError::KeyNotFound(code) => Some(*code),
+            _ => None,
+        }
+    }
+
+    pub fn io_result(&self) -> Option<i32> {
+        match self {
+            SMCError::Unknown(io_res, _) => Some(*io_res),
+            _ => None,
+        }
+    }
+
+    pub fn smc_result(&self) -> Option<u8> {
+        match self {
+            SMCError::Unknown(_, smc_res) => Some(*smc_res),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SMCError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SMCError::DriverNotFound => write!(f, "Driver not found."),
+            SMCError::FailedToOpen => write!(f, "Failed to open driver."),
+            SMCError::KeyNotFound(code) => write!(f, "Key {:?} not found.", code),
+            SMCError::NotPrivileged => write!(f, "You do NOT have enough privileges."),
+            SMCError::UnsafeFanSpeed => write!(f, "Fan speed is unsafe to be setted."),
+            SMCError::Unknown(io_res, smc_res) => write!(
+                f,
+                "Unknown error: IOKit exited with code {} and SMC result {}.",
+                io_res, smc_res
+            ),
+            SMCError::Sysctl => write!(f, "sysctl() call failed."),
+        }
+    }
+}
+
+impl std::error::Error for SMCError {
+    fn description(&self) -> &str {
+        "SMC error"
+    }
+}
+
+fn get_cpus_number() -> Option<usize> {
+    let mut mib: [i32; 2] = [CTL_HW, HW_PACKAGES];
+    let mut num: u32 = 0;
+    let mut len: usize = std::mem::size_of::<u32>();
+
+    let res = unsafe {
+        sysctl(
+            &mut mib[0] as *mut _,
+            2,
+            &mut num as *mut _ as *mut c_void,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if res == -1 {
+        None
+    } else {
+        Some(num as usize)
+    }
+}
+
+fn get_cores_number() -> Option<usize> {
+    let mut mib: [i32; 2] = [CTL_HW, HW_PHYSICALCPU];
+    let mut num: u32 = 0;
+    let mut len: usize = std::mem::size_of::<u32>();
+
+    let res = unsafe {
+        sysctl(
+            &mut mib[0] as *mut _,
+            2,
+            &mut num as *mut _ as *mut c_void,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if res == -1 {
+        None
+    } else {
+        Some(num as usize)
+    }
+}
+
+struct SMCRepr(Mutex<io_connect_t>);
+
+impl SMCRepr {
+    fn new() -> Result<SMCRepr, SMCError> {
+        let conn: io_connect_t = kIOMasterPortDefault;
+        let result: kern_return_t;
+        let device = unsafe {
+            IOServiceGetMatchingService(
+                kIOMasterPortDefault,
+                IOServiceMatching(b"AppleSMC\0" as *const _),
+            )
+        };
+
+        if device.is_null() {
+            return Err(SMCError::DriverNotFound);
+        }
+
+        result = unsafe { IOServiceOpen(&mut *device, mach_task_self(), 0, &conn) };
+        unsafe { IOObjectRelease(&mut *device) };
+        if result != kIOReturnSuccess {
+            return Err(SMCError::FailedToOpen);
+        }
+
+        Ok(SMCRepr(Mutex::new(conn)))
+    }
+
+    #[allow(non_upper_case_globals)]
+    fn call_driver(&self, input: &SMCParam) -> Result<SMCParam, SMCError> {
+        let mut output: SMCParam = unsafe { std::mem::zeroed() };
+        let input_size: usize = std::mem::size_of::<SMCParam>();
+        let mut output_size: usize = std::mem::size_of::<SMCParam>();
+
+        let conn = self.0.lock().unwrap();
+
+        let result = unsafe {
+            IOConnectCallStructMethod(
+                *conn,
+                2,
+                input as *const _ as *const c_void,
+                input_size,
+                &mut output as *mut _ as *mut c_void,
+                &mut output_size,
+            )
+        };
+
+        match (result, output.result) {
+            (kIOReturnSuccess, 0) => Ok(output),
+            (kIOReturnSuccess, 132) => Err(SMCError::KeyNotFound(input.key)),
+            (kIOReturnNotPrivileged, _) => Err(SMCError::NotPrivileged),
+            _ => Err(SMCError::Unknown(result, output.result)),
+        }
+    }
+
+    fn read_data<T>(&self, key: SMCKey) -> Result<T, SMCError>
+    where
+        T: SMCType,
+    {
+        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        input.key = key.code;
+        input.key_info.data_size = key.info.size;
+        input.selector = SMCSelector::ReadKey;
+
+        let output = self.call_driver(&input)?;
+
+        Ok(SMCType::from_smc(key.info, output.bytes))
+    }
+
+    fn write_data<T>(&self, key: SMCKey, data: T) -> Result<(), SMCError>
+    where
+        T: Into<SMCBytes>,
+    {
+        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        input.key = key.code;
+        input.bytes = data.into();
+        input.key_info.data_size = key.info.size;
+        input.selector = SMCSelector::WriteKey;
+
+        self.call_driver(&input)?;
+
+        Ok(())
+    }
+
+    fn key_information(&self, key: FourCharCode) -> Result<DataType, SMCError> {
+        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        input.key = key;
+        input.selector = SMCSelector::GetKeyInfo;
+
+        let output = self.call_driver(&input)?;
+
+        Ok(DataType {
+            id: output.key_info.data_type,
+            size: output.key_info.data_size,
+        })
+    }
+
+    fn read_key<T>(&self, code: FourCharCode) -> Result<T, SMCError>
+    where
+        T: SMCType,
+    {
+        let info = self.key_information(code)?;
+        self.read_data(SMCKey { code, info })
+    }
+
+    fn key_information_at_index(&self, index: u32) -> Result<FourCharCode, SMCError> {
+        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        input.selector = SMCSelector::GetKeyFromIndex;
+        input.data32 = index;
+
+        let output = self.call_driver(&input)?;
+
+        Ok(output.key)
+    }
+}
+
+impl Drop for SMCRepr {
+    fn drop(&mut self) {
+        let conn = self.0.lock().unwrap();
+        unsafe { IOServiceClose(*conn) };
+    }
+}
+
+unsafe impl Send for SMCRepr {}
+unsafe impl Sync for SMCRepr {}
+
+pub struct Fan {
+    smc_repr: Arc<SMCRepr>,
+    id: u32,
+    name: String,
+}
+
+impl fmt::Debug for Fan {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Fan")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+impl Clone for Fan {
+    fn clone(&self) -> Fan {
+        Fan {
+            smc_repr: self.smc_repr.clone(),
+            id: self.id,
+            name: self.name.clone(),
+        }
     }
 }
 
 impl Fan {
-    pub fn rpm(&self) -> f64 {
-        let mut rpm = self.actual_speed - self.min_speed;
+    #[inline]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn min_speed(&self) -> Result<f64, SMCError> {
+        self.smc_repr.read_key(fcc_format!("F{}Mn", self.id))
+    }
+
+    pub fn max_speed(&self) -> Result<f64, SMCError> {
+        self.smc_repr.read_key(fcc_format!("F{}Mx", self.id))
+    }
+
+    pub fn current_speed(&self) -> Result<f64, SMCError> {
+        self.smc_repr.read_key(fcc_format!("F{}Ac", self.id))
+    }
+
+    pub fn rpm(&self) -> Result<f64, SMCError> {
+        let mut rpm = self.current_speed()? - self.min_speed()?;
         if rpm < 0.0 {
             rpm = 0.0;
         }
 
-        rpm
+        Ok(rpm)
     }
 
-    pub fn percent(&self) -> f64 {
-        self.rpm() / (self.max_speed - self.min_speed) * 100.0
+    pub fn percent(&self) -> Result<f64, SMCError> {
+        let current = self.current_speed()?;
+        let min = self.min_speed()?;
+        let max = self.max_speed()?;
+
+        let rpm = current - min;
+        let rpm = if rpm < 0.0 { 0.0 } else { rpm };
+
+        Ok(rpm / (max - min) * 100.0)
     }
 }
 
-type Fans = Vec<Fan>;
+unsafe impl Send for Fan {}
+unsafe impl Sync for Fan {}
 
-pub fn fans_rpm() -> Option<Fans> {
-    let mut val: SMCVal_t = unsafe { ::std::mem::zeroed() };
+pub struct SMC(Arc<SMCRepr>);
 
-    if unsafe { read_key(c_str!(FNum), &mut val) } != kIOReturnSuccess {
-        return None;
+impl SMC {
+    pub fn new() -> Result<SMC, SMCError> {
+        Ok(SMC(Arc::new(SMCRepr::new()?)))
     }
 
-    let nfans = _strtoul(&val.bytes[0] as *const c_char, val.dataSize as c_int, 10) as usize;
-    let mut res: Vec<Fan> = Vec::with_capacity(nfans);
+    fn _keys_len(&self) -> Result<u32, SMCError> {
+        self.0.read_key(four_char_code!("#KEY"))
+    }
 
-    for i in 0..nfans {
-        unsafe { libc::memset(&mut val as *mut SMCVal_t as *mut c_void, 0, ::std::mem::size_of::<SMCVal_t>()); }
-        if unsafe { read_key(c_format!("F{}ID", i), &mut val) } != kIOReturnSuccess {
-            return None;
+    pub fn keys_len(&self) -> Result<usize, SMCError> {
+        Ok(self._keys_len()? as usize)
+    }
+
+    pub fn keys(&self) -> Result<Vec<FourCharCode>, SMCError> {
+        let len = self._keys_len()?;
+        let mut res: Vec<FourCharCode> = Vec::with_capacity(len as usize);
+
+        for i in 0..len {
+            res.push(self.0.key_information_at_index(i)?);
         }
 
-        let name = String::from(unsafe {
-            CStr::from_ptr(((&val.bytes[0] as *const c_char as usize) + 4) as *mut c_char)
-                .to_str().unwrap().trim()
-        });
-
-        let actual_speed = fan_rpm(c_format!("F{}Ac", i))?;
-        let minimum_speed = fan_rpm(c_format!("F{}Mn", i))?;
-        let maximum_speed = fan_rpm(c_format!("F{}Mx", i))?;
-
-        res.push(Fan {
-            name: name,
-            min_speed: minimum_speed,
-            actual_speed: actual_speed,
-            max_speed: maximum_speed,
-        });
+        Ok(res)
     }
 
-    Some(res)
+    pub fn smc_keys(&self) -> Result<Vec<SMCKey>, SMCError> {
+        let len = self._keys_len()?;
+        let mut res: Vec<SMCKey> = Vec::with_capacity(len as usize);
+
+        for i in 0..len {
+            let key = self.0.key_information_at_index(i)?;
+            let info = self.0.key_information(key)?;
+            res.push(SMCKey { code: key, info });
+        }
+
+        Ok(res)
+    }
+
+    pub fn fans_len(&self) -> Result<usize, SMCError> {
+        Ok(usize::from(self.0.read_key::<u8>(four_char_code!("FNum"))?))
+    }
+
+    pub fn fan(&self, id: u32) -> Result<Fan, SMCError> {
+        let res: RawFan = self.0.read_key(fcc_format!("F{}ID", id))?;
+
+        Ok(Fan {
+            smc_repr: self.0.clone(),
+            id,
+            name: res.name,
+        })
+    }
+
+    pub fn fans(&self) -> Result<Vec<Fan>, SMCError> {
+        let len = self.fans_len()?;
+        let mut res: Vec<Fan> = Vec::with_capacity(len);
+
+        for i in 0..len {
+            res.push(self.fan(i as u32)?);
+        }
+
+        Ok(res)
+    }
+
+    pub fn is_optical_disk_drive_full(&self) -> Result<bool, SMCError> {
+        self.0.read_key(four_char_code!("MSDI"))
+    }
+
+    pub fn all_temperature_sensors_keys(&self) -> Result<Vec<FourCharCode>, SMCError> {
+        Ok(self.smc_keys()?.into_iter().filter_map(|k| {
+            if k.code.to_string().starts_with("T") && k.info.id == TYPE_SP78 {
+                Some(k.code)
+            } else {
+                None
+            }
+        }).collect())
+    }
+
+    pub fn all_temperature_sensors(&self) -> Result<HashMap<FourCharCode, f64>, SMCError> {
+        let keys = self.all_temperature_sensors_keys()?;
+        let mut res = HashMap::with_capacity(keys.len());
+
+        for key in keys.into_iter() {
+            res.insert(key, self.0.read_key(key)?);
+        }
+
+        Ok(res)
+    }
+
+    pub fn temperature(&self, key: FourCharCode) -> Result<f64, SMCError> {
+        if key.to_string().starts_with("T") {
+            let info = self.0.key_information(key)?;
+
+            if info.id == TYPE_SP78 {
+                self.0.read_key(key)
+            } else {
+                Err(SMCError::KeyNotFound(key))
+            }
+        } else {
+            Err(SMCError::KeyNotFound(key))
+        }
+    }
+
+    pub fn cpu_temperature(&self, id: u8) -> Result<f64, SMCError> {
+        self.temperature(fcc_format!("TC{}C", id))
+    }
+
+    pub fn cpus_temperature(&self) -> Result<Vec<f64>, SMCError> {
+        let cores = match get_cores_number() {
+            Some(x) => x as u8,
+            None => return Err(SMCError::Sysctl),
+        };
+
+        let mut res: Vec<f64> = Vec::with_capacity(usize::from(cores));
+
+        for i in 0..cores {
+            res.push(self.cpu_temperature(i)?);
+        }
+
+        Ok(res)
+    }
+
+    pub fn package_temperature(&self, id: u8) -> Result<Vec<f64>, SMCError> {
+        let cpusno = match get_cpus_number() {
+            Some(x) => x as u8,
+            None => return Err(SMCError::Sysctl),
+        };
+
+        let cores = match get_cores_number() {
+            Some(x) => x as u8,
+            None => return Err(SMCError::Sysctl),
+        };
+
+        let cpc = cores / cpusno;
+        let start = cpc * id;
+        let stop = start + cpc;
+
+        let mut res: Vec<f64> = Vec::with_capacity(usize::from(cpc));
+
+        for i in start..stop {
+            res.push(self.cpu_temperature(i)?);
+        }
+
+        Ok(res)
+    }
+
+    pub fn packages_temperature(&self) -> Result<Vec<Vec<f64>>, SMCError> {
+        let cpusno = match get_cpus_number() {
+            Some(x) => x as u8,
+            None => return Err(SMCError::Sysctl),
+        };
+
+        let mut res: Vec<Vec<f64>> = Vec::with_capacity(usize::from(cpusno));
+
+        for i in 0..cpusno {
+            res.push(self.package_temperature(i)?);
+        }
+
+        Ok(res)
+    }
+
+    pub fn gpu_temperature(&self, id: u8) -> Result<f64, SMCError> {
+        self.temperature(fcc_format!("FG{}C", id))
+    }
+
+    pub fn gpus_temperature(&self) -> Result<Vec<f64>, SMCError> {
+        let mut res: Vec<f64> = Vec::new();
+        let mut idx: u8 = 0;
+
+        loop {
+            match self.gpu_temperature(idx) {
+                Ok(temp) => {
+                    res.push(temp);
+                },
+                Err(SMCError::KeyNotFound(_)) => {
+                    break;
+                },
+                Err(err) => {
+                    return Err(err);
+                },
+            }
+            idx += 1;
+        }
+
+        Ok(res)
+    }
+}
+
+impl Clone for SMC {
+    fn clone(&self) -> SMC {
+        SMC(self.0.clone())
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        use crate::{ cpu_temp, gpu_temp, fans_rpm };
-
-        cpu_temp();
-        gpu_temp();
-        fans_rpm();
-    }
+#[test]
+fn it_works() {
+    let smc = SMC::new().unwrap();
+    println!("Fans: {:.2?}", smc.fans());
+    println!("{:?}", smc.cpus_temperature());
+    println!("{:?}", smc.gpus_temperature());
 }

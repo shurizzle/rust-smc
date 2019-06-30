@@ -10,9 +10,6 @@ description = "macOS SMC implementation."
 repository = "https://github.com/shurizzle/rust-smc"
 keywords = ["macos", "smc", "cpu", "gpu", "fan", "themal"]
 
-[dependencies]
-
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.50"
-core-foundation = "0.6.3"
-ctor = "0.1.8"
+four-char-code = "0.0.3"
