@@ -1,20 +1,18 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("SMC only works on macOS");
 
-extern crate ctor;
 extern crate four_char_code;
 extern crate libc;
+#[macro_use]
+extern crate lazy_static;
 
 mod conversions;
 mod sys;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::os::raw::c_void;
-use std::sync::{
-    atomic::{AtomicPtr, Ordering},
-    Arc, Mutex,
-};
-use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use self::{conversions::*, sys::*};
 
@@ -358,6 +356,10 @@ impl Drop for SMCRepr {
 unsafe impl Send for SMCRepr {}
 unsafe impl Sync for SMCRepr {}
 
+lazy_static! {
+    static ref SHARED: Mutex<Option<Arc<SMCRepr>>> = Mutex::new(None);
+}
+
 pub struct Fan {
     smc_repr: Arc<SMCRepr>,
     id: u32,
@@ -437,6 +439,19 @@ impl SMC {
         Ok(SMC(Arc::new(SMCRepr::new()?)))
     }
 
+    pub fn shared() -> Result<SMC, SMCError> {
+        let mut shared = SHARED.lock().unwrap();
+        match (*shared).as_ref() {
+            None => {
+                let smc = Arc::new(SMCRepr::new()?);
+                let res = smc.clone();
+                *shared = Some(smc);
+                Ok(SMC(res))
+            }
+            Some(shared) => Ok(SMC(shared.clone())),
+        }
+    }
+
     fn _keys_len(&self) -> Result<u32, SMCError> {
         self.0.read_key(four_char_code!("#KEY"))
     }
@@ -499,13 +514,17 @@ impl SMC {
     }
 
     pub fn all_temperature_sensors_keys(&self) -> Result<Vec<FourCharCode>, SMCError> {
-        Ok(self.smc_keys()?.into_iter().filter_map(|k| {
-            if k.code.to_string().starts_with("T") && k.info.id == TYPE_SP78 {
-                Some(k.code)
-            } else {
-                None
-            }
-        }).collect())
+        Ok(self
+            .smc_keys()?
+            .into_iter()
+            .filter_map(|k| {
+                if k.code.to_string().starts_with("T") && k.info.id == TYPE_SP78 {
+                    Some(k.code)
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     pub fn all_temperature_sensors(&self) -> Result<HashMap<FourCharCode, f64>, SMCError> {
@@ -603,13 +622,13 @@ impl SMC {
             match self.gpu_temperature(idx) {
                 Ok(temp) => {
                     res.push(temp);
-                },
+                }
                 Err(SMCError::KeyNotFound(_)) => {
                     break;
-                },
+                }
                 Err(err) => {
                     return Err(err);
-                },
+                }
             }
             idx += 1;
         }
@@ -627,7 +646,7 @@ impl Clone for SMC {
 #[cfg(test)]
 #[test]
 fn it_works() {
-    let smc = SMC::new().unwrap();
+    let smc = SMC::shared().unwrap();
     println!("Fans: {:.2?}", smc.fans());
     println!("{:?}", smc.cpus_temperature());
     println!("{:?}", smc.gpus_temperature());

@@ -223,7 +223,7 @@ impl SMCType for u32 {
 }
 
 impl SMCType for RawFan {
-    fn to_smc(&self, data_type: DataType) -> SMCBytes {
+    fn to_smc(&self, _data_type: DataType) -> SMCBytes {
         panic!("You can't write a RawFan type");
     }
 
@@ -246,7 +246,11 @@ macro_rules! def_float {
             fn to_smc(&self, data_type: DataType) -> SMCBytes {
                 if data_type.id == TYPE_FPE2 {
                     if self.is_sign_negative() {
-                        panic!(concat!("Cannot convert negative ", stringify!($t), " to fpe2"));
+                        panic!(concat!(
+                            "Cannot convert negative ",
+                            stringify!($t),
+                            " to fpe2"
+                        ));
                     }
 
                     let value = ((self * 4.0) as u16).to_be();
@@ -273,7 +277,10 @@ macro_rules! def_float {
                     }
                     res
                 } else {
-                    panic!(concat!("Cannot convert ", stringify!($t), " to {:?}"), data_type);
+                    panic!(
+                        concat!("Cannot convert ", stringify!($t), " to {:?}"),
+                        data_type
+                    );
                 }
             }
 
@@ -281,13 +288,17 @@ macro_rules! def_float {
                 if data_type.id == TYPE_FPE2 {
                     (u16::from_be(unsafe { *(&bytes.0[0] as *const _ as *const u16) }) as $t) / 4.0
                 } else if data_type.id == TYPE_SP78 {
-                    (i16::from_be(unsafe { *(&bytes.0[0] as *const _ as *const i16) }) as $t) / 256.0
+                    (i16::from_be(unsafe { *(&bytes.0[0] as *const _ as *const i16) }) as $t)
+                        / 256.0
                 } else {
-                    panic!(concat!("Cannot convert {:?} to ", stringify!($t)), data_type);
+                    panic!(
+                        concat!("Cannot convert {:?} to ", stringify!($t)),
+                        data_type
+                    );
                 }
             }
         }
-    }
+    };
 }
 
 def_float!(f32);
