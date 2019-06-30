@@ -1,6 +1,6 @@
 [package]
 name = "smc"
-version = "0.1.0"
+version = "0.2.0"
 
 authors = ["Domenico Shura <shura1991@gmail.com>"]
 license = "WTFPL"
@@ -8,7 +8,7 @@ edition = "2018"
 
 description = "macOS SMC implementation."
 repository = "https://github.com/shurizzle/rust-smc"
-keywords = ["macos", "smc", "cpu", "gpu", "fan", "themal"]
+keywords = ["macos", "smc", "cpu", "fan", "themal"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 lazy_static = "1.3.0"
