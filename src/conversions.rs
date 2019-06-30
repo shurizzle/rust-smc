@@ -34,12 +34,15 @@ fn read_string(buffer: *const u8, max: usize) -> String {
         .to_string()
 }
 
-fn write_string(buffer: *mut u8, value: &str, max: usize) {
-    let len = if value.len() > max { max } else { value.len() };
-    unsafe {
-        memcpy(buffer as *mut c_void, value.as_ptr() as *const c_void, len);
-    }
-}
+// fn write_string(buffer: *mut u8, value: &str, max: usize) {
+//     let len = if value.len() > max { max } else { value.len() };
+//     unsafe {
+//         memcpy(buffer as *mut c_void, value.as_ptr() as *const c_void, len);
+//         if max > len {
+//             memset(buffer.add(len) as *mut c_void, 32, max - len);
+//         }
+//     }
+// }
 
 pub trait SMCType {
     fn to_smc(&self, data_type: DataType) -> SMCBytes;
@@ -158,7 +161,7 @@ impl SMCType for u16 {
     fn from_smc(data_type: DataType, bytes: SMCBytes) -> u16 {
         if data_type.id == TYPE_U8 {
             u16::from(<u8 as SMCType>::from_smc(data_type, bytes))
-        } else if data_type.id == TYPE_I16 {
+        } else if data_type.id == TYPE_U16 {
             u16::from_be(unsafe { *(&(bytes.0[0]) as *const _ as *const u16) })
         } else {
             panic!("Cannot convert {:?} to u16", data_type);

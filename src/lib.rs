@@ -46,7 +46,7 @@ macro_rules! fcc_format {
 
 #[repr(u8)]
 enum SMCSelector {
-    HandleYPCEvent = 2,
+    // HandleYPCEvent = 2,
     ReadKey = 5,
     WriteKey = 6,
     GetKeyFromIndex = 8,
@@ -55,43 +55,40 @@ enum SMCSelector {
 
 #[repr(C)]
 struct SMCVersion {
-    // 6
-    major: u8,    // 1
-    minor: u8,    // 1
-    build: u8,    // 1
-    reserved: u8, // 1
-    release: u16, // 1
+    major: u8,
+    minor: u8,
+    build: u8,
+    reserved: u8,
+    release: u16,
 }
 
 #[repr(C)]
 struct SMCPLimitData {
-    // 16
-    version: u16,    // 2
-    length: u16,     // 2
-    cpu_plimit: u32, // 4
-    gpu_plimit: u32, // 4
-    mem_plimit: u32, // 4
+    version: u16,
+    length: u16,
+    cpu_plimit: u32,
+    gpu_plimit: u32,
+    mem_plimit: u32,
 }
 
 #[repr(C)]
 struct SMCKeyInfoData {
-    // 9
-    data_size: u32,          // 4
-    data_type: FourCharCode, // 4
-    data_attributes: u8,     // 1
+    data_size: u32,
+    data_type: FourCharCode,
+    data_attributes: u8,
 }
 
 #[repr(C)]
 struct SMCParam {
-    key: FourCharCode,           // 4
-    vers: SMCVersion,            // 6
-    p_limit_data: SMCPLimitData, // 16
-    key_info: SMCKeyInfoData,    // 9
-    result: u8,                  // 1
-    status: u8,                  // 1
-    selector: SMCSelector,       // 1
-    data32: u32,                 // 4
-    bytes: SMCBytes,             // 32
+    key: FourCharCode,
+    vers: SMCVersion,
+    p_limit_data: SMCPLimitData,
+    key_info: SMCKeyInfoData,
+    result: u8,
+    status: u8,
+    selector: SMCSelector,
+    data32: u32,
+    bytes: SMCBytes,
 }
 
 macro_rules! err_system {
@@ -138,7 +135,7 @@ pub enum SMCError {
     NotPrivileged,
     UnsafeFanSpeed,
     Unknown(i32, u8),
-    Sysctl,
+    Sysctl(i32),
 }
 
 impl SMCError {
@@ -177,7 +174,7 @@ impl fmt::Display for SMCError {
                 "Unknown error: IOKit exited with code {} and SMC result {}.",
                 io_res, smc_res
             ),
-            SMCError::Sysctl => write!(f, "sysctl() call failed."),
+            SMCError::Sysctl(errno) => write!(f, "sysctl() call failed with errno {}.", errno),
         }
     }
 }
@@ -185,6 +182,12 @@ impl fmt::Display for SMCError {
 impl std::error::Error for SMCError {
     fn description(&self) -> &str {
         "SMC error"
+    }
+}
+
+macro_rules! sysctl_errno {
+    () => {
+        SMCError::Sysctl(::std::io::Error::last_os_error().raw_os_error().unwrap())
     }
 }
 
@@ -301,11 +304,11 @@ impl SMCRepr {
 
     fn write_data<T>(&self, key: SMCKey, data: T) -> Result<(), SMCError>
     where
-        T: Into<SMCBytes>,
+        T: SMCType,
     {
         let mut input: SMCParam = unsafe { std::mem::zeroed() };
         input.key = key.code;
-        input.bytes = data.into();
+        input.bytes = SMCType::to_smc(&data, key.info);
         input.key_info.data_size = key.info.size;
         input.selector = SMCSelector::WriteKey;
 
@@ -333,6 +336,14 @@ impl SMCRepr {
     {
         let info = self.key_information(code)?;
         self.read_data(SMCKey { code, info })
+    }
+
+    fn write_key<T>(&self, code: FourCharCode, data: T) -> Result<(), SMCError>
+    where
+        T: SMCType,
+    {
+        let info = self.key_information(code)?;
+        self.write_data(SMCKey { code, info }, data)
     }
 
     fn key_information_at_index(&self, index: u32) -> Result<FourCharCode, SMCError> {
@@ -415,6 +426,38 @@ impl Fan {
         }
 
         Ok(rpm)
+    }
+
+    pub fn is_managed(&self) -> Result<bool, SMCError> {
+        let bitmask: u16 = self.smc_repr.read_key(four_char_code!("FS! "))?;
+        Ok(bitmask & (1_u16 << (self.id as u16)) == 0)
+    }
+
+    pub fn set_managed(&self, what: bool) -> Result<(), SMCError> {
+        let bitmask: u16 = self.smc_repr.read_key(four_char_code!("FS! "))?;
+        let mask = 1_u16 << (self.id as u16);
+        let new: u16 = if what {
+            bitmask & !mask
+        } else {
+            bitmask | mask
+        };
+
+        if bitmask != new {
+            self.smc_repr.write_key(four_char_code!("FS! "), new)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn set_min_speed(&self, speed: f64) -> Result<(), SMCError> {
+        let max = self.max_speed()?;
+        if speed <= 0.0 || speed > max {
+            Err(SMCError::UnsafeFanSpeed)
+        } else {
+            self.set_managed(false)?;
+            self.smc_repr
+                .write_key(fcc_format!("F{}Mn", self.id), speed)
+        }
     }
 
     pub fn percent(&self) -> Result<f64, SMCError> {
@@ -559,7 +602,7 @@ impl SMC {
     pub fn cpus_temperature(&self) -> Result<Vec<f64>, SMCError> {
         let cores = match get_cores_number() {
             Some(x) => x as u8,
-            None => return Err(SMCError::Sysctl),
+            None => return Err(sysctl_errno!()),
         };
 
         let mut res: Vec<f64> = Vec::with_capacity(usize::from(cores));
@@ -574,12 +617,12 @@ impl SMC {
     pub fn package_temperature(&self, id: u8) -> Result<Vec<f64>, SMCError> {
         let cpusno = match get_cpus_number() {
             Some(x) => x as u8,
-            None => return Err(SMCError::Sysctl),
+            None => return Err(sysctl_errno!()),
         };
 
         let cores = match get_cores_number() {
             Some(x) => x as u8,
-            None => return Err(SMCError::Sysctl),
+            None => return Err(sysctl_errno!()),
         };
 
         let cpc = cores / cpusno;
@@ -598,7 +641,7 @@ impl SMC {
     pub fn packages_temperature(&self) -> Result<Vec<Vec<f64>>, SMCError> {
         let cpusno = match get_cpus_number() {
             Some(x) => x as u8,
-            None => return Err(SMCError::Sysctl),
+            None => return Err(sysctl_errno!()),
         };
 
         let mut res: Vec<Vec<f64>> = Vec::with_capacity(usize::from(cpusno));
@@ -641,13 +684,4 @@ impl Clone for SMC {
     fn clone(&self) -> SMC {
         SMC(self.0.clone())
     }
-}
-
-#[cfg(test)]
-#[test]
-fn it_works() {
-    let smc = SMC::shared().unwrap();
-    println!("Fans: {:.2?}", smc.fans());
-    println!("{:?}", smc.cpus_temperature());
-    println!("{:?}", smc.gpus_temperature());
 }
