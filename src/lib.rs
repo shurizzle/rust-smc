@@ -188,7 +188,7 @@ impl std::error::Error for SMCError {
 macro_rules! sysctl_errno {
     () => {
         SMCError::Sysctl(::std::io::Error::last_os_error().raw_os_error().unwrap())
-    }
+    };
 }
 
 fn get_cpus_number() -> Option<usize> {
@@ -457,6 +457,18 @@ impl Fan {
             self.set_managed(false)?;
             self.smc_repr
                 .write_key(fcc_format!("F{}Mn", self.id), speed)
+        }
+    }
+
+    pub fn set_speed(&self, speed: f64) -> Result<(), SMCError> {
+        let min = self.min_speed()?;
+        let max = self.max_speed()?;
+        if speed <= min || speed > max {
+            Err(SMCError::UnsafeFanSpeed)
+        } else {
+            self.set_managed(false)?;
+            self.smc_repr
+                .write_key(fcc_format!("F{}Tg", self.id), speed)
         }
     }
 
