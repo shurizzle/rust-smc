@@ -454,7 +454,6 @@ impl Fan {
         if speed <= 0.0 || speed > max {
             Err(SMCError::UnsafeFanSpeed)
         } else {
-            self.set_managed(false)?;
             self.smc_repr
                 .write_key(fcc_format!("F{}Mn", self.id), speed)
         }
