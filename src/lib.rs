@@ -459,7 +459,7 @@ impl Fan {
         }
     }
 
-    pub fn set_speed(&self, speed: f64) -> Result<(), SMCError> {
+    pub fn set_current_speed(&self, speed: f64) -> Result<(), SMCError> {
         let min = self.min_speed()?;
         let max = self.max_speed()?;
         if speed <= min || speed > max {
