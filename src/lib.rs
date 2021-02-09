@@ -24,14 +24,14 @@ use libc::{sysctl, CTL_HW};
 pub struct SMCBytes([u8; 32]); // 32
 
 // "ch8*", "char", "flag", "flt ", "fp1f", "fp6a", "fp79", "fp88", "fpe2", "hex_", "si16", "si8 ", "sp1e", "sp2d", "sp3c", "sp4b", "sp5a", "sp69", "sp78", "sp87", "ui16", "ui32", "ui8 ", "{alc", "{ali", "{alp", "{alv", "{fds", "{hdi", "{lim", "{lkb", "{lks", "{mss", "{rev"
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct DataType {
     pub id: FourCharCode,
     pub size: u32,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct SMCKey {
     pub code: FourCharCode,
@@ -44,8 +44,10 @@ macro_rules! fcc_format {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
 #[repr(u8)]
 enum SMCSelector {
+    Unknown = 0,
     // HandleYPCEvent = 2,
     ReadKey = 5,
     WriteKey = 6,
@@ -53,6 +55,13 @@ enum SMCSelector {
     GetKeyInfo = 9,
 }
 
+impl Default for SMCSelector {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Default, Debug, Copy, Clone)]
 #[repr(C)]
 struct SMCVersion {
     major: u8,
@@ -62,6 +71,7 @@ struct SMCVersion {
     release: u16,
 }
 
+#[derive(Default, Debug, Copy, Clone)]
 #[repr(C)]
 struct SMCPLimitData {
     version: u16,
@@ -71,6 +81,7 @@ struct SMCPLimitData {
     mem_plimit: u32,
 }
 
+#[derive(Default, Debug, Copy, Clone)]
 #[repr(C)]
 struct SMCKeyInfoData {
     data_size: u32,
@@ -78,6 +89,7 @@ struct SMCKeyInfoData {
     data_attributes: u8,
 }
 
+#[derive(Default, Debug, Copy, Clone)]
 #[repr(C)]
 struct SMCParam {
     key: FourCharCode,
@@ -263,7 +275,7 @@ impl SMCRepr {
 
     #[allow(non_upper_case_globals)]
     fn call_driver(&self, input: &SMCParam) -> Result<SMCParam, SMCError> {
-        let mut output: SMCParam = unsafe { std::mem::zeroed() };
+        let mut output: SMCParam = Default::default();
         let input_size: usize = std::mem::size_of::<SMCParam>();
         let mut output_size: usize = std::mem::size_of::<SMCParam>();
 
@@ -292,7 +304,7 @@ impl SMCRepr {
     where
         T: SMCType,
     {
-        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        let mut input: SMCParam = Default::default();
         input.key = key.code;
         input.key_info.data_size = key.info.size;
         input.selector = SMCSelector::ReadKey;
@@ -306,7 +318,7 @@ impl SMCRepr {
     where
         T: SMCType,
     {
-        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        let mut input: SMCParam = Default::default();
         input.key = key.code;
         input.bytes = SMCType::to_smc(&data, key.info);
         input.key_info.data_size = key.info.size;
@@ -318,7 +330,7 @@ impl SMCRepr {
     }
 
     fn key_information(&self, key: FourCharCode) -> Result<DataType, SMCError> {
-        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        let mut input: SMCParam = Default::default();
         input.key = key;
         input.selector = SMCSelector::GetKeyInfo;
 
@@ -347,7 +359,7 @@ impl SMCRepr {
     }
 
     fn key_information_at_index(&self, index: u32) -> Result<FourCharCode, SMCError> {
-        let mut input: SMCParam = unsafe { std::mem::zeroed() };
+        let mut input: SMCParam = Default::default();
         input.selector = SMCSelector::GetKeyFromIndex;
         input.data32 = index;
 
