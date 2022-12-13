@@ -9,16 +9,17 @@ use four_char_code::{four_char_code, FourCharCode};
 use libc::{c_void, memcpy};
 use std::{slice, str};
 
-const TYPE_FLAG: FourCharCode = four_char_code!("flag");
-const TYPE_I8: FourCharCode = four_char_code!("si8 ");
-const TYPE_U8: FourCharCode = four_char_code!("ui8 ");
-const TYPE_I16: FourCharCode = four_char_code!("si16");
-const TYPE_U16: FourCharCode = four_char_code!("ui16");
-const TYPE_I32: FourCharCode = four_char_code!("si32");
-const TYPE_U32: FourCharCode = four_char_code!("ui32");
-const TYPE_FPE2: FourCharCode = four_char_code!("fpe2");
-const TYPE_SP78: FourCharCode = four_char_code!("sp78");
-const TYPE_FAN: FourCharCode = four_char_code!("{fds");
+pub const TYPE_FLAG: FourCharCode = four_char_code!("flag");
+pub const TYPE_I8: FourCharCode = four_char_code!("si8 ");
+pub const TYPE_U8: FourCharCode = four_char_code!("ui8 ");
+pub const TYPE_I16: FourCharCode = four_char_code!("si16");
+pub const TYPE_U16: FourCharCode = four_char_code!("ui16");
+pub const TYPE_I32: FourCharCode = four_char_code!("si32");
+pub const TYPE_U32: FourCharCode = four_char_code!("ui32");
+pub const TYPE_FLT: FourCharCode = four_char_code!("flt ");
+pub const TYPE_FPE2: FourCharCode = four_char_code!("fpe2");
+pub const TYPE_SP78: FourCharCode = four_char_code!("sp78");
+pub const TYPE_FAN: FourCharCode = four_char_code!("{fds");
 
 fn read_string(buffer: *const u8, max: usize) -> String {
     let len = match unsafe { slice::from_raw_parts(buffer, max) }
@@ -279,6 +280,18 @@ macro_rules! def_float {
                         );
                     }
                     res
+                } else if data_type.id == TYPE_FLT {
+                    let value = (*self as f32).to_bits();
+
+                    let mut res: SMCBytes = Default::default();
+                    unsafe {
+                        memcpy(
+                            &mut res as *mut _ as *mut c_void,
+                            &value as *const _ as *const c_void,
+                            std::mem::size_of::<u32>(),
+                        );
+                    }
+                    res
                 } else {
                     panic!(
                         concat!("Cannot convert ", stringify!($t), " to {:?}"),
@@ -293,6 +306,8 @@ macro_rules! def_float {
                 } else if data_type.id == TYPE_SP78 {
                     (i16::from_be(unsafe { *(&bytes.0[0] as *const _ as *const i16) }) as $t)
                         / 256.0
+                } else if data_type.id == TYPE_FLT {
+                    f32::from_bits(unsafe { *(&bytes.0[0] as *const _ as *const u32) }) as $t
                 } else {
                     panic!(
                         concat!("Cannot convert {:?} to ", stringify!($t)),

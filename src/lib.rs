@@ -134,8 +134,6 @@ const MACH_PORT_NULL: mach_port_t = 0 as mach_port_t;
 #[allow(non_upper_case_globals)]
 const kIOMasterPortDefault: mach_port_t = MACH_PORT_NULL;
 
-const TYPE_SP78: FourCharCode = four_char_code!("sp78");
-
 const HW_PACKAGES: i32 = 125;
 const HW_PHYSICALCPU: i32 = 101;
 
@@ -608,7 +606,7 @@ impl SMC {
         if key.to_string().starts_with("T") {
             let info = self.0.key_information(key)?;
 
-            if info.id == TYPE_SP78 {
+            if info.id == TYPE_SP78 || info.id == TYPE_FLT {
                 self.0.read_key(key)
             } else {
                 Err(SMCError::KeyNotFound(key))
