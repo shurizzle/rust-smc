@@ -516,6 +516,7 @@ impl SMC {
         }
     }
 
+    #[inline]
     pub fn read_key<T: SMCType>(&self, key: FourCharCode) -> Result<T, SMCError> {
         self.0.read_key(key)
     }
