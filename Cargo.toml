@@ -1,6 +1,6 @@
 [package]
 name = "smc"
-version = "0.2.3"
+version = "0.2.4"
 
 authors = ["Domenico Shura <shura1991@gmail.com>"]
 license = "WTFPL"
