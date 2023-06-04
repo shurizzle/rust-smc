@@ -253,7 +253,7 @@ struct SMCRepr(Mutex<io_connect_t>);
 impl SMCRepr {
     fn new() -> Result<SMCRepr, SMCError> {
         let conn: io_connect_t = kIOMasterPortDefault;
-        let result: kern_return_t;
+
         let device = unsafe {
             IOServiceGetMatchingService(
                 kIOMasterPortDefault,
@@ -265,7 +265,8 @@ impl SMCRepr {
             return Err(SMCError::DriverNotFound);
         }
 
-        result = unsafe { IOServiceOpen(&mut *device, mach_task_self(), 0, &conn) };
+        let result: kern_return_t =
+            unsafe { IOServiceOpen(&mut *device, mach_task_self(), 0, &conn) };
         unsafe { IOObjectRelease(&mut *device) };
         if result != kIOReturnSuccess {
             return Err(SMCError::FailedToOpen);
@@ -305,10 +306,12 @@ impl SMCRepr {
     where
         T: SMCType,
     {
-        let mut input: SMCParam = Default::default();
-        input.key = key.code;
+        let mut input = SMCParam {
+            key: key.code,
+            selector: SMCSelector::ReadKey,
+            ..Default::default()
+        };
         input.key_info.data_size = key.info.size;
-        input.selector = SMCSelector::ReadKey;
 
         let output = self.call_driver(&input)?;
 
@@ -319,11 +322,13 @@ impl SMCRepr {
     where
         T: SMCType,
     {
-        let mut input: SMCParam = Default::default();
-        input.key = key.code;
-        input.bytes = SMCType::to_smc(&data, key.info);
+        let mut input = SMCParam {
+            key: key.code,
+            bytes: SMCType::to_smc(&data, key.info),
+            selector: SMCSelector::WriteKey,
+            ..Default::default()
+        };
         input.key_info.data_size = key.info.size;
-        input.selector = SMCSelector::WriteKey;
 
         self.call_driver(&input)?;
 
@@ -331,9 +336,11 @@ impl SMCRepr {
     }
 
     fn key_information(&self, key: FourCharCode) -> Result<DataType, SMCError> {
-        let mut input: SMCParam = Default::default();
-        input.key = key;
-        input.selector = SMCSelector::GetKeyInfo;
+        let input = SMCParam {
+            key,
+            selector: SMCSelector::GetKeyInfo,
+            ..Default::default()
+        };
 
         let output = self.call_driver(&input)?;
 
@@ -346,11 +353,12 @@ impl SMCRepr {
     fn read_key_raw(&self, code: FourCharCode) -> Result<SMCBytes, SMCError> {
         let info = self.key_information(code)?;
         let key = SMCKey { code, info };
-        let mut input: SMCParam = Default::default();
-        input.key = key.code;
+        let mut input = SMCParam {
+            key: key.code,
+            selector: SMCSelector::ReadKey,
+            ..Default::default()
+        };
         input.key_info.data_size = key.info.size;
-        input.selector = SMCSelector::ReadKey;
-
         let output = self.call_driver(&input)?;
         Ok(output.bytes)
     }
@@ -372,9 +380,11 @@ impl SMCRepr {
     }
 
     fn key_information_at_index(&self, index: u32) -> Result<FourCharCode, SMCError> {
-        let mut input: SMCParam = Default::default();
-        input.selector = SMCSelector::GetKeyFromIndex;
-        input.data32 = index;
+        let input = SMCParam {
+            selector: SMCSelector::GetKeyFromIndex,
+            data32: index,
+            ..Default::default()
+        };
 
         let output = self.call_driver(&input)?;
 
@@ -656,7 +666,7 @@ impl SMC {
             .smc_keys()?
             .into_iter()
             .filter_map(|k| {
-                if k.code.to_string().starts_with("T") && k.info.id == TYPE_SP78 {
+                if k.code.to_string().starts_with('T') && k.info.id == TYPE_SP78 {
                     Some(k.code)
                 } else {
                     None
@@ -677,7 +687,7 @@ impl SMC {
     }
 
     pub fn temperature(&self, key: FourCharCode) -> Result<f64, SMCError> {
-        if key.to_string().starts_with("T") {
+        if key.to_string().starts_with('T') {
             let info = self.0.key_information(key)?;
 
             if info.id == TYPE_SP78 || info.id == TYPE_FLT {
