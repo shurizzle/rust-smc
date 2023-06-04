@@ -249,7 +249,7 @@ struct SMCRepr(Mutex<io_connect_t>);
 impl SMCRepr {
     fn new() -> Result<SMCRepr, SMCError> {
         let conn: io_connect_t = kIOMasterPortDefault;
-        let result: kern_return_t;
+
         let device = unsafe {
             IOServiceGetMatchingService(
                 kIOMasterPortDefault,
@@ -261,7 +261,8 @@ impl SMCRepr {
             return Err(SMCError::DriverNotFound);
         }
 
-        result = unsafe { IOServiceOpen(&mut *device, mach_task_self(), 0, &conn) };
+        let result: kern_return_t =
+            unsafe { IOServiceOpen(&mut *device, mach_task_self(), 0, &conn) };
         unsafe { IOObjectRelease(&mut *device) };
         if result != kIOReturnSuccess {
             return Err(SMCError::FailedToOpen);
@@ -301,10 +302,12 @@ impl SMCRepr {
     where
         T: SMCType,
     {
-        let mut input: SMCParam = Default::default();
-        input.key = key.code;
+        let mut input = SMCParam {
+            key: key.code,
+            selector: SMCSelector::ReadKey,
+            ..Default::default()
+        };
         input.key_info.data_size = key.info.size;
-        input.selector = SMCSelector::ReadKey;
 
         let output = self.call_driver(&input)?;
 
@@ -315,11 +318,13 @@ impl SMCRepr {
     where
         T: SMCType,
     {
-        let mut input: SMCParam = Default::default();
-        input.key = key.code;
-        input.bytes = SMCType::to_smc(&data, key.info);
+        let mut input = SMCParam {
+            key: key.code,
+            bytes: SMCType::to_smc(&data, key.info),
+            selector: SMCSelector::WriteKey,
+            ..Default::default()
+        };
         input.key_info.data_size = key.info.size;
-        input.selector = SMCSelector::WriteKey;
 
         self.call_driver(&input)?;
 
@@ -327,9 +332,11 @@ impl SMCRepr {
     }
 
     fn key_information(&self, key: FourCharCode) -> Result<DataType, SMCError> {
-        let mut input: SMCParam = Default::default();
-        input.key = key;
-        input.selector = SMCSelector::GetKeyInfo;
+        let input = SMCParam {
+            key,
+            selector: SMCSelector::GetKeyInfo,
+            ..Default::default()
+        };
 
         let output = self.call_driver(&input)?;
 
@@ -337,6 +344,19 @@ impl SMCRepr {
             id: output.key_info.data_type,
             size: output.key_info.data_size,
         })
+    }
+
+    fn read_key_raw(&self, code: FourCharCode) -> Result<SMCBytes, SMCError> {
+        let info = self.key_information(code)?;
+        let key = SMCKey { code, info };
+        let mut input = SMCParam {
+            key: key.code,
+            selector: SMCSelector::ReadKey,
+            ..Default::default()
+        };
+        input.key_info.data_size = key.info.size;
+        let output = self.call_driver(&input)?;
+        Ok(output.bytes)
     }
 
     fn read_key<T>(&self, code: FourCharCode) -> Result<T, SMCError>
@@ -356,9 +376,11 @@ impl SMCRepr {
     }
 
     fn key_information_at_index(&self, index: u32) -> Result<FourCharCode, SMCError> {
-        let mut input: SMCParam = Default::default();
-        input.selector = SMCSelector::GetKeyFromIndex;
-        input.data32 = index;
+        let input = SMCParam {
+            selector: SMCSelector::GetKeyFromIndex,
+            data32: index,
+            ..Default::default()
+        };
 
         let output = self.call_driver(&input)?;
 
@@ -378,6 +400,54 @@ unsafe impl Sync for SMCRepr {}
 
 lazy_static! {
     static ref SHARED: Mutex<Option<Arc<SMCRepr>>> = Mutex::new(None);
+}
+
+/// Power subsystem of the SMC.
+#[derive(Clone)]
+pub struct Power {
+    smc_repr: Arc<SMCRepr>,
+}
+
+impl Power {
+    /// Checks if charging is enabled.
+    pub fn is_charging_enabled(&self) -> Result<bool, SMCError> {
+        // This one has an odd type code "hex_"
+        let charging_enabled = self.smc_repr.read_key_raw(FourCharCode::from("CH0B"))?;
+        Ok(charging_enabled.0[0] == 0)
+    }
+    /// Enables charging.
+    pub fn enable_charging(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0B"), 0)?;
+        self.smc_repr.write_key(FourCharCode::from("CH0C"), 0)
+    }
+    /// Disables charging.
+    pub fn disable_charging(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0B"), 2)?;
+        self.smc_repr.write_key(FourCharCode::from("CH0C"), 2)
+    }
+    /// Checks if the adapter is enabled.
+    pub fn is_adapter_enabled(&self) -> Result<bool, SMCError> {
+        let adapter_enabled: u8 = self.smc_repr.read_key(FourCharCode::from("CH0I"))?;
+        Ok(adapter_enabled == 0)
+    }
+    /// Enables the adapter.
+    pub fn enable_adapter(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0I"), 0)
+    }
+    /// Disables the adapter.
+    pub fn disable_adapter(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0I"), 1)
+    }
+    /// Gets the current battery charge level.
+    pub fn get_charge(&self) -> Result<u8, SMCError> {
+        let charge: u8 = self.smc_repr.read_key(FourCharCode::from("BUIC"))?;
+        Ok(charge)
+    }
+    /// Checks if the laptop is plugged in.
+    pub fn is_plugged_in(&self) -> Result<bool, SMCError> {
+        let ac_present: i8 = self.smc_repr.read_key(FourCharCode::from("AC-W"))?;
+        Ok(ac_present == 4)
+    }
 }
 
 pub struct Fan {
@@ -586,7 +656,7 @@ impl SMC {
             .smc_keys()?
             .into_iter()
             .filter_map(|k| {
-                if k.code.to_string().starts_with("T") && k.info.id == TYPE_SP78 {
+                if k.code.to_string().starts_with('T') && k.info.id == TYPE_SP78 {
                     Some(k.code)
                 } else {
                     None
@@ -607,7 +677,7 @@ impl SMC {
     }
 
     pub fn temperature(&self, key: FourCharCode) -> Result<f64, SMCError> {
-        if key.to_string().starts_with("T") {
+        if key.to_string().starts_with('T') {
             let info = self.0.key_information(key)?;
 
             if info.id == TYPE_SP78 || info.id == TYPE_FLT {
@@ -639,6 +709,12 @@ impl SMC {
         Ok(res)
     }
 
+    /// Get a reference to the power system
+    pub fn power(&self) -> Result<Power, SMCError> {
+        Ok(Power {
+            smc_repr: self.0.clone(),
+        })
+    }
     pub fn package_temperature(&self, id: u8) -> Result<Vec<f64>, SMCError> {
         let cpusno = match get_cpus_number() {
             Some(x) => x as u8,
