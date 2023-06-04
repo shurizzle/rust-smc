@@ -381,6 +381,53 @@ lazy_static! {
     static ref SHARED: Mutex<Option<Arc<SMCRepr>>> = Mutex::new(None);
 }
 
+/// Power subsystem of the SMC.
+#[derive(Clone)]
+pub struct Power {
+    smc_repr: Arc<SMCRepr>,
+}
+
+impl Power {
+    /// Checks if charging is enabled.
+    pub fn is_charging_enabled(&self) -> Result<bool, SMCError> {
+        let charging_enabled: u8 = self.smc_repr.read_key(FourCharCode::from("CH0B"))?;
+        Ok(charging_enabled == 0)
+    }
+    /// Enables charging.
+    pub fn enable_charging(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0B"), 0)?;
+        self.smc_repr.write_key(FourCharCode::from("CH0C"), 0)
+    }
+    /// Disables charging.
+    pub fn disable_charging(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0B"), 2)?;
+        self.smc_repr.write_key(FourCharCode::from("CH0C"), 2)
+    }
+    /// Checks if the adapter is enabled.
+    pub fn is_adapater_enabled(&self) -> Result<bool, SMCError> {
+        let adapter_enabled: u8 = self.smc_repr.read_key(FourCharCode::from("CH0I"))?;
+        Ok(adapter_enabled == 0)
+    }
+    /// Enables the adapter.
+    pub fn enable_adapter(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0I"), 0)
+    }
+    /// Disables the adapter.
+    pub fn disable_adapter(&self) -> Result<(), SMCError> {
+        self.smc_repr.write_key(FourCharCode::from("CH0I"), 1)
+    }
+    /// Gets the current battery charge level.
+    pub fn get_charge(&self) -> Result<u8, SMCError> {
+        let charge: u8 = self.smc_repr.read_key(FourCharCode::from("BUIC"))?;
+        Ok(charge)
+    }
+    /// Checks if the laptop is plugged in.
+    pub fn is_plugged_in(&self) -> Result<bool, SMCError> {
+        let ac_present: u8 = self.smc_repr.read_key(FourCharCode::from("AC-W"))?;
+        Ok(ac_present == 1)
+    }
+}
+
 pub struct Fan {
     smc_repr: Arc<SMCRepr>,
     id: u32,
@@ -519,6 +566,10 @@ impl SMC {
     #[inline]
     pub fn read_key<T: SMCType>(&self, key: FourCharCode) -> Result<T, SMCError> {
         self.0.read_key(key)
+    }
+
+    pub fn write_key<T: SMCType>(&self, key: FourCharCode, value: T) -> Result<(), SMCError> {
+        self.0.write_key(key, value)
     }
 
     fn _keys_len(&self) -> Result<u32, SMCError> {
