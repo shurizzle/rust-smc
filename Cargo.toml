@@ -8,7 +8,7 @@ edition = "2018"
 
 description = "macOS SMC implementation."
 repository = "https://github.com/shurizzle/rust-smc"
-keywords = ["macos", "smc", "cpu", "fan", "themal"]
+keywords = ["macos", "smc", "cpu", "fan", "thermal"]
 
 [package.metadata]
 msrv = "1.38.0"
