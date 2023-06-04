@@ -1,5 +1,4 @@
-#[cfg(not(target_os = "macos"))]
-compile_error!("SMC only works on macOS");
+#![cfg(target_os = "macos")]
 
 extern crate four_char_code;
 extern crate libc;
