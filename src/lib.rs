@@ -596,10 +596,6 @@ impl SMC {
         self.0.read_key(key)
     }
 
-    pub fn write_key<T: SMCType>(&self, key: FourCharCode, value: T) -> Result<(), SMCError> {
-        self.0.write_key(key, value)
-    }
-
     fn _keys_len(&self) -> Result<u32, SMCError> {
         self.0.read_key(four_char_code!("#KEY"))
     }
