@@ -9,6 +9,9 @@ extern crate lazy_static;
 mod conversions;
 mod sys;
 
+use byteorder::ReadBytesExt;
+use std::io::Cursor;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::os::raw::c_void;
@@ -340,6 +343,18 @@ impl SMCRepr {
         })
     }
 
+    fn read_key_raw(&self, code: FourCharCode) -> Result<SMCBytes, SMCError> {
+        let info = self.key_information(code)?;
+        let key = SMCKey { code, info };
+        let mut input: SMCParam = Default::default();
+        input.key = key.code;
+        input.key_info.data_size = key.info.size;
+        input.selector = SMCSelector::ReadKey;
+
+        let output = self.call_driver(&input)?;
+        Ok(output.bytes)
+    }
+
     fn read_key<T>(&self, code: FourCharCode) -> Result<T, SMCError>
     where
         T: SMCType,
@@ -390,7 +405,10 @@ pub struct Power {
 impl Power {
     /// Checks if charging is enabled.
     pub fn is_charging_enabled(&self) -> Result<bool, SMCError> {
-        let charging_enabled: u8 = self.smc_repr.read_key(FourCharCode::from("CH0B"))?;
+        // This one has an odd type code "hex_"
+        let charging_enabled = self.smc_repr.read_key_raw(FourCharCode::from("CH0B"))?;
+        let mut cursor = Cursor::new(charging_enabled.0);
+        let charging_enabled: u8 = cursor.read_u8().unwrap();
         Ok(charging_enabled == 0)
     }
     /// Enables charging.
@@ -404,7 +422,7 @@ impl Power {
         self.smc_repr.write_key(FourCharCode::from("CH0C"), 2)
     }
     /// Checks if the adapter is enabled.
-    pub fn is_adapater_enabled(&self) -> Result<bool, SMCError> {
+    pub fn is_adapter_enabled(&self) -> Result<bool, SMCError> {
         let adapter_enabled: u8 = self.smc_repr.read_key(FourCharCode::from("CH0I"))?;
         Ok(adapter_enabled == 0)
     }
@@ -423,7 +441,7 @@ impl Power {
     }
     /// Checks if the laptop is plugged in.
     pub fn is_plugged_in(&self) -> Result<bool, SMCError> {
-        let ac_present: u8 = self.smc_repr.read_key(FourCharCode::from("AC-W"))?;
+        let ac_present: i8 = self.smc_repr.read_key(FourCharCode::from("AC-W"))?;
         Ok(ac_present == 1)
     }
 }
@@ -691,6 +709,12 @@ impl SMC {
         Ok(res)
     }
 
+    /// Get a reference to the power system
+    pub fn power(&self) -> Result<Power, SMCError> {
+        Ok(Power {
+            smc_repr: self.0.clone(),
+        })
+    }
     pub fn package_temperature(&self, id: u8) -> Result<Vec<f64>, SMCError> {
         let cpusno = match get_cpus_number() {
             Some(x) => x as u8,
