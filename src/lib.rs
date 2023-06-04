@@ -9,9 +9,6 @@ extern crate lazy_static;
 mod conversions;
 mod sys;
 
-use byteorder::ReadBytesExt;
-use std::io::Cursor;
-
 use std::collections::HashMap;
 use std::fmt;
 use std::os::raw::c_void;
@@ -417,9 +414,7 @@ impl Power {
     pub fn is_charging_enabled(&self) -> Result<bool, SMCError> {
         // This one has an odd type code "hex_"
         let charging_enabled = self.smc_repr.read_key_raw(FourCharCode::from("CH0B"))?;
-        let mut cursor = Cursor::new(charging_enabled.0);
-        let charging_enabled: u8 = cursor.read_u8().unwrap();
-        Ok(charging_enabled == 0)
+        Ok(charging_enabled.0[0] == 0)
     }
     /// Enables charging.
     pub fn enable_charging(&self) -> Result<(), SMCError> {
@@ -452,7 +447,7 @@ impl Power {
     /// Checks if the laptop is plugged in.
     pub fn is_plugged_in(&self) -> Result<bool, SMCError> {
         let ac_present: i8 = self.smc_repr.read_key(FourCharCode::from("AC-W"))?;
-        Ok(ac_present == 1)
+        Ok(ac_present == 4)
     }
 }
 
