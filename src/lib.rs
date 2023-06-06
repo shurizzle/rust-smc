@@ -3,7 +3,7 @@
 
 use core::mem::MaybeUninit;
 
-use four_char_code::FourCharCode;
+use four_char_code::{four_char_code, FourCharCode};
 use libc::c_void;
 use sys::{io_connect_t, kIOReturnNotPrivileged, IOConnectCallStructMethod, IOServiceClose};
 
@@ -239,6 +239,11 @@ impl SMC {
                 out.key
             })
         }
+    }
+
+    #[inline]
+    pub fn is_optical_disk_drive_full(&self) -> Result<bool> {
+        self.read_key(four_char_code!("MSDI"))
     }
 }
 
