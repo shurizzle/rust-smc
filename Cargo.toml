@@ -8,6 +8,7 @@ edition = "2021"
 description = "macOS SMC implementation."
 repository = "https://github.com/shurizzle/rust-smc"
 keywords = ["macos", "smc", "cpu", "fan", "thermal"]
+rust-version = "1.57.0"
 
 [features]
 default = []
