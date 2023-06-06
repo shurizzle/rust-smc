@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use core::{borrow::Borrow, fmt, ops::Deref};
 
 use four_char_code::{four_char_code as fcc, FourCharCode};
@@ -16,7 +14,6 @@ pub const TYPE_U32: FourCharCode = fcc!("ui32");
 pub const TYPE_FLT: FourCharCode = fcc!("flt ");
 pub const TYPE_FPE2: FourCharCode = fcc!("fpe2");
 pub const TYPE_SP78: FourCharCode = fcc!("sp78");
-pub const TYPE_FAN: FourCharCode = fcc!("{fds");
 
 // pub trait IntoSMC {
 //     fn into_smc(self, data_type: DataType) -> Option<SMCBytes>;

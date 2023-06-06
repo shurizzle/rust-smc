@@ -79,6 +79,7 @@ impl Fan {
             min_speed: smc.get_fan_min_speed(id)?,
             max_speed: smc.get_fan_max_speed(id)?,
             current_speed: smc.get_fan_current_speed(id)?,
+            managed: smc.managed_fans()? & (1u16 << (*id as u16)) == 0,
         })
     }
 }
@@ -88,6 +89,7 @@ pub struct FanInfo {
     min_speed: f32,
     max_speed: f32,
     current_speed: f32,
+    managed: bool,
 }
 
 impl FanInfo {
@@ -117,6 +119,11 @@ impl FanInfo {
     }
 
     #[inline]
+    pub fn is_managed(&self) -> bool {
+        self.managed
+    }
+
+    #[inline]
     pub fn into_fan(self) -> Fan {
         self.fan
     }
@@ -125,6 +132,7 @@ impl FanInfo {
         self.min_speed = smc.get_fan_min_speed(self.id())?;
         self.max_speed = smc.get_fan_max_speed(self.id())?;
         self.current_speed = smc.get_fan_current_speed(self.id())?;
+        self.managed = smc.managed_fans()? & (1u16 << (*self.fan.id as u16)) == 0;
 
         Ok(())
     }
@@ -202,6 +210,11 @@ impl SMC {
         Ok(FanInfos {
             inner: self.fans()?,
         })
+    }
+
+    #[inline]
+    pub fn managed_fans(&self) -> Result<u16> {
+        self.read_key(four_char_code!("FS! "))
     }
 }
 
