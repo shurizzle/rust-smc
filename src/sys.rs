@@ -1,7 +1,6 @@
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
-#![allow(dead_code)]
 
 use libc::c_void;
 
@@ -70,6 +69,3 @@ pub const kIOReturnNotPrivileged: kern_return_t = iokit_common_err!(0x2c1);
 
 pub const MACH_PORT_NULL: mach_port_t = 0 as mach_port_t;
 pub const kIOMasterPortDefault: mach_port_t = MACH_PORT_NULL;
-
-pub const HW_PACKAGES: i32 = 125;
-pub const HW_PHYSICALCPU: i32 = 101;

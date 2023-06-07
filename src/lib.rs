@@ -16,7 +16,7 @@ pub mod util;
 
 pub use error::SMCError;
 pub use fans::*;
-pub use keys::KeyIter;
+pub use keys::Keys;
 pub use types::*;
 
 use crate::sys::{
@@ -34,7 +34,7 @@ pub struct DataType {
 }
 
 #[derive(Default, Debug, Copy, Clone)]
-pub struct SMCKey {
+struct SMCKey {
     pub code: FourCharCode,
     pub info: DataType,
 }

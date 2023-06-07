@@ -1,10 +1,10 @@
-use four_char_code::{four_char_code, FourCharCode};
+use four_char_code::{four_char_code as fcc, FourCharCode};
 
 use crate::{Result, SMC};
 
 impl SMC {
     fn _keys_len(&self) -> Result<u32> {
-        self.read_key::<u32>(four_char_code!("#KEY"))
+        self.read_key::<u32>(fcc!("#KEY"))
     }
 
     #[inline]
@@ -12,9 +12,9 @@ impl SMC {
         self._keys_len().map(|n| n as usize)
     }
 
-    pub fn keys(&self) -> Result<KeyIter> {
+    pub fn keys(&self) -> Result<Keys> {
         let len = self._keys_len()?;
-        Ok(KeyIter {
+        Ok(Keys {
             smc: self,
             len,
             pos: 0,
@@ -22,13 +22,13 @@ impl SMC {
     }
 }
 
-pub struct KeyIter<'a> {
+pub struct Keys<'a> {
     smc: &'a SMC,
     len: u32,
     pos: u32,
 }
 
-impl<'a> Iterator for KeyIter<'a> {
+impl<'a> Iterator for Keys<'a> {
     type Item = Result<FourCharCode>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -85,14 +85,14 @@ impl<'a> Iterator for KeyIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for KeyIter<'a> {
+impl<'a> ExactSizeIterator for Keys<'a> {
     #[inline]
     fn len(&self) -> usize {
         (self.len - self.pos) as usize
     }
 }
 
-impl<'a> DoubleEndedIterator for KeyIter<'a> {
+impl<'a> DoubleEndedIterator for Keys<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.len > self.pos {
             self.len -= 1;
