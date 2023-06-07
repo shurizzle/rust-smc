@@ -12,6 +12,7 @@ mod fans;
 mod keys;
 pub(crate) mod sys;
 mod types;
+pub mod util;
 
 pub use error::SMCError;
 pub use fans::*;
@@ -192,7 +193,7 @@ impl SMC {
         })
     }
 
-    pub fn read_data<T>(&self, key: SMCKey) -> Result<T>
+    fn read_data<T>(&self, key: SMCKey) -> Result<T>
     where
         T: FromSMC,
     {
@@ -216,6 +217,34 @@ impl SMC {
         T::from_smc(val).map_or(Err(SMCError::TryFrom(val)), Ok)
     }
 
+    fn write_data<T>(&mut self, key: SMCKey, val: T) -> Result<()>
+    where
+        T: IntoSMC,
+    {
+        let mut res = SMCVal {
+            r#type: key.info.id,
+            size: key.info.size as usize,
+            ..Default::default()
+        };
+        if T::into_smc(val, &mut res).is_none() {
+            return Err(SMCError::TryInto);
+        }
+
+        unsafe {
+            self.call_driver(&SMCParam {
+                key: key.code,
+                key_info: SMCKeyInfoData {
+                    data_size: key.info.size,
+                    ..Default::default()
+                },
+                selector: SMCSelector::WriteKey,
+                bytes: res.data,
+                ..Default::default()
+            })?
+        };
+        Ok(())
+    }
+
     pub fn read_key<T>(&self, key: FourCharCode) -> Result<T>
     where
         T: FromSMC,
@@ -225,6 +254,20 @@ impl SMC {
             code: key,
             info: data_type,
         })
+    }
+
+    pub unsafe fn write_key<T>(&mut self, key: FourCharCode, val: T) -> Result<()>
+    where
+        T: IntoSMC,
+    {
+        let data_type = self.key_info(key)?;
+        self.write_data(
+            SMCKey {
+                code: key,
+                info: data_type,
+            },
+            val,
+        )
     }
 
     pub fn get_key(&self, index: u32) -> Result<FourCharCode> {

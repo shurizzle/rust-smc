@@ -11,8 +11,8 @@ pub enum SMCError {
     InvalidKey(four_char_code::FccConversionError),
     KeyNotFound(FourCharCode),
     NotPrivileged,
-    UnsafeFanSpeed,
     TryFrom(SMCVal),
+    TryInto,
     Unknown(i32, u8),
     Sysctl(i32),
 }
@@ -55,8 +55,8 @@ impl fmt::Display for SMCError {
             SMCError::InvalidKey(err) => fmt::Display::fmt(err, f),
             SMCError::KeyNotFound(code) => write!(f, "Key {:?} not found.", code),
             SMCError::NotPrivileged => write!(f, "You do NOT have enough privileges."),
-            SMCError::UnsafeFanSpeed => write!(f, "Fan speed is unsafe to be setted."),
             SMCError::TryFrom(_) => write!(f, "Invalid conversion from smc value"),
+            SMCError::TryInto => write!(f, "Invalid conversion into smc value"),
             SMCError::Unknown(io_res, smc_res) => write!(
                 f,
                 "Unknown error: IOKit exited with code {} and SMC result {}.",

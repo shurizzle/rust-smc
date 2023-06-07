@@ -4,20 +4,20 @@ use four_char_code::{four_char_code as fcc, FourCharCode};
 
 use crate::SMCVal;
 
-pub const TYPE_FLAG: FourCharCode = fcc!("flag");
-pub const TYPE_I8: FourCharCode = fcc!("si8 ");
-pub const TYPE_U8: FourCharCode = fcc!("ui8 ");
-pub const TYPE_I16: FourCharCode = fcc!("si16");
-pub const TYPE_U16: FourCharCode = fcc!("ui16");
-pub const TYPE_I32: FourCharCode = fcc!("si32");
-pub const TYPE_U32: FourCharCode = fcc!("ui32");
-pub const TYPE_FLT: FourCharCode = fcc!("flt ");
-pub const TYPE_FPE2: FourCharCode = fcc!("fpe2");
-pub const TYPE_SP78: FourCharCode = fcc!("sp78");
+pub(crate) const TYPE_FLAG: FourCharCode = fcc!("flag");
+pub(crate) const TYPE_I8: FourCharCode = fcc!("si8 ");
+pub(crate) const TYPE_U8: FourCharCode = fcc!("ui8 ");
+pub(crate) const TYPE_I16: FourCharCode = fcc!("si16");
+pub(crate) const TYPE_U16: FourCharCode = fcc!("ui16");
+pub(crate) const TYPE_I32: FourCharCode = fcc!("si32");
+pub(crate) const TYPE_U32: FourCharCode = fcc!("ui32");
+pub(crate) const TYPE_FLT: FourCharCode = fcc!("flt ");
+pub(crate) const TYPE_FPE2: FourCharCode = fcc!("fpe2");
+pub(crate) const TYPE_SP78: FourCharCode = fcc!("sp78");
 
-// pub trait IntoSMC {
-//     fn into_smc(self, data_type: DataType) -> Option<SMCBytes>;
-// }
+pub trait IntoSMC {
+    fn into_smc(self, param: &mut SMCVal) -> Option<()>;
+}
 
 pub trait FromSMC: Sized {
     fn from_smc(param: SMCVal) -> Option<Self>;
