@@ -2,7 +2,7 @@ use core::{borrow::Borrow, fmt, mem::MaybeUninit, ops::Deref};
 
 use four_char_code::{fcc_format, four_char_code, FourCharCode};
 
-use crate::{FromSMC, OneDigit, Result, UMax10, SMC};
+use crate::{util, FromSMC, IntoSMC, OneDigit, Result, SMCError, UMax10, SMC};
 
 const TYPE_FAN: FourCharCode = four_char_code!("{fds");
 
@@ -55,6 +55,79 @@ impl Borrow<[u8]> for FanName {
     }
 }
 
+fn is_managed(fan: &Fan, smc: &SMC) -> Result<bool> {
+    Ok(smc.managed_fans()? & (1u16 << (*fan.id as u16)) == 0)
+}
+
+fn rpm(current: f32, min: f32) -> f32 {
+    let mut rpm = current - min;
+    if rpm < 0.0 {
+        rpm = 0.0;
+    }
+    rpm
+}
+
+pub fn percent(current: f32, min: f32, max: f32) -> f32 {
+    let rpm = current - min;
+    let rpm = if rpm < 0.0 { 0.0 } else { rpm };
+
+    rpm / (max - min) * 100.0
+}
+
+// hide safe initialization
+mod __private {
+    use crate::{util, IntoSMC};
+
+    pub struct CheckedSpeed(f32);
+
+    impl CheckedSpeed {
+        #[inline]
+        pub unsafe fn new_unchecked(value: f32) -> Self {
+            Self(value)
+        }
+    }
+
+    impl IntoSMC for CheckedSpeed {
+        #[inline]
+        fn into_smc(self, param: &mut crate::SMCVal) -> Option<()> {
+            util::write_f32(self.0, param)
+        }
+    }
+}
+use __private::CheckedSpeed;
+
+pub fn set_min_speed(smc: &mut SMC, id: OneDigit, max: f32, speed: f32) -> Result<()> {
+    if speed <= 0.0 || speed > max {
+        Err(SMCError::TryInto)
+    } else {
+        unsafe {
+            smc.write_key(
+                fcc_format!("F{}Mn", *id)?,
+                CheckedSpeed::new_unchecked(speed),
+            )
+        }
+    }
+}
+
+pub fn set_current_speed(
+    smc: &mut SMC,
+    id: OneDigit,
+    min: f32,
+    max: f32,
+    speed: f32,
+) -> Result<()> {
+    if speed < min || speed > max {
+        Err(SMCError::TryInto)
+    } else {
+        unsafe {
+            smc.write_key(
+                fcc_format!("F{}Tg", *id)?,
+                CheckedSpeed::new_unchecked(speed),
+            )
+        }
+    }
+}
+
 pub struct Fan {
     id: OneDigit,
     name: FanName,
@@ -71,15 +144,65 @@ impl Fan {
         &self.name
     }
 
+    #[inline]
+    pub fn min_speed(&self, smc: &SMC) -> Result<f32> {
+        smc.get_fan_min_speed(self.id())
+    }
+
+    #[inline]
+    pub fn max_speed(&self, smc: &SMC) -> Result<f32> {
+        smc.get_fan_max_speed(self.id())
+    }
+
+    #[inline]
+    pub fn current_speed(&self, smc: &SMC) -> Result<f32> {
+        smc.get_fan_current_speed(self.id())
+    }
+
+    #[inline]
+    pub fn is_managed(&self, smc: &SMC) -> Result<bool> {
+        is_managed(self, smc)
+    }
+
+    pub fn rpm(&self, smc: &SMC) -> Result<f32> {
+        Ok(rpm(self.current_speed(smc)?, self.min_speed(smc)?))
+    }
+
+    pub fn set_managed(&self, smc: &mut SMC, managed: bool) -> Result<()> {
+        smc.fan_set_managed(self.id(), managed)
+    }
+
+    pub fn percent(&self, smc: &SMC) -> Result<f32> {
+        Ok(percent(
+            self.current_speed(smc)?,
+            self.min_speed(smc)?,
+            self.max_speed(smc)?,
+        ))
+    }
+
+    pub fn set_min_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
+        let max = self.max_speed(smc)?;
+        set_min_speed(smc, self.id(), max, speed)
+    }
+
+    pub fn set_current_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
+        let min = self.min_speed(smc)?;
+        let max = self.max_speed(smc)?;
+        set_current_speed(smc, self.id(), min, max, speed)
+    }
+
     pub fn into_info(self, smc: &SMC) -> Result<FanInfo> {
-        let id = self.id;
+        let min_speed = self.min_speed(smc)?;
+        let max_speed = self.max_speed(smc)?;
+        let current_speed = self.current_speed(smc)?;
+        let managed = self.is_managed(smc)?;
 
         Ok(FanInfo {
             fan: self,
-            min_speed: smc.get_fan_min_speed(id)?,
-            max_speed: smc.get_fan_max_speed(id)?,
-            current_speed: smc.get_fan_current_speed(id)?,
-            managed: smc.managed_fans()? & (1u16 << (*id as u16)) == 0,
+            min_speed,
+            max_speed,
+            current_speed,
+            managed,
         })
     }
 }
@@ -121,6 +244,31 @@ impl FanInfo {
     #[inline]
     pub fn is_managed(&self) -> bool {
         self.managed
+    }
+
+    #[inline]
+    pub fn rpm(&self) -> f32 {
+        rpm(self.current_speed(), self.min_speed())
+    }
+
+    #[inline]
+    pub fn percent(&self) -> f32 {
+        percent(self.current_speed(), self.min_speed(), self.max_speed())
+    }
+
+    #[inline]
+    pub fn set_managed(&self, smc: &mut SMC, managed: bool) -> Result<()> {
+        smc.fan_set_managed(self.id(), managed)
+    }
+
+    #[inline]
+    pub fn set_min_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
+        set_min_speed(smc, self.id(), self.max_speed(), speed)
+    }
+
+    #[inline]
+    pub fn set_current_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
+        set_current_speed(smc, self.id(), self.min_speed(), self.max_speed(), speed)
     }
 
     #[inline]
@@ -215,6 +363,29 @@ impl SMC {
     #[inline]
     pub fn managed_fans(&self) -> Result<u16> {
         self.read_key(four_char_code!("FS! "))
+    }
+
+    pub fn fan_set_managed(&mut self, id: OneDigit, managed: bool) -> Result<()> {
+        let bitmask = self.managed_fans()?;
+        let mask = 1u16 << (*id as u16);
+        let new: u16 = if managed {
+            bitmask & !mask
+        } else {
+            bitmask | mask
+        };
+
+        struct CheckedBitmask(u16);
+        impl IntoSMC for CheckedBitmask {
+            fn into_smc(self, param: &mut crate::SMCVal) -> Option<()> {
+                util::write_u16(self.0, param)
+            }
+        }
+
+        if bitmask != new {
+            unsafe { self.write_key(four_char_code!("FS! "), CheckedBitmask(new)) }
+        } else {
+            Ok(())
+        }
     }
 }
 
