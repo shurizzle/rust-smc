@@ -22,11 +22,13 @@ impl core::fmt::Display for ValOrErr {
             Self::Val(val) => {
                 write!(f, "[{}] ", val.r#type.display())?;
                 if let Some(i) = i64::from_smc(*val) {
-                    write!(f, "{: <11}", i)?;
+                    write!(f, "{: <16}", i)?;
                 } else if let Some(b) = bool::from_smc(*val) {
-                    write!(f, "{: <11?}", b)?;
+                    write!(f, "{: <16?}", b)?;
+                } else if let Some(d) = f32::from_smc(*val) {
+                    write!(f, "{: <16?}", d)?;
                 } else {
-                    write!(f, "?          ")?;
+                    write!(f, "?               ")?;
                 }
 
                 write!(f, " len({: >2}) ", val.len())?;
@@ -48,10 +50,6 @@ impl core::fmt::Display for ValOrErr {
 
 fn main() -> Result<()> {
     let smc = SMC::new()?;
-    // for f in smc.fan_infos()? {
-    //     let f = f?;
-    //     println!("{:#?}", f);
-    // }
     for key in smc.keys()? {
         let key = key?;
         println!(
