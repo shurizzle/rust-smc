@@ -48,7 +48,7 @@ use crate::sys::{
     IOServiceMatching, IOServiceOpen,
 };
 
-/// Alias for `core::result::Result` with the crate's [`SMCError`](crate::SMCError).
+/// Alias for `core::result::Result` with the crate's [`SMCError`]
 pub type Result<T> = core::result::Result<T, SMCError>;
 
 // "ch8*", "char", "flag", "flt ", "fp1f", "fp6a", "fp79", "fp88", "fpe2", "hex_", "si16", "si8 ", "sp1e", "sp2d", "sp3c", "sp4b", "sp5a", "sp69", "sp78", "sp87", "ui16", "ui32", "ui8 ", "{alc", "{ali", "{alp", "{alv", "{fds", "{hdi", "{lim", "{lkb", "{lks", "{mss", "{rev"
