@@ -15,11 +15,15 @@ pub(crate) const TYPE_FLT: FourCharCode = fcc!("flt ");
 pub(crate) const TYPE_FPE2: FourCharCode = fcc!("fpe2");
 pub(crate) const TYPE_SP78: FourCharCode = fcc!("sp78");
 
+/// Conversion into an SMC value.
 pub trait IntoSMC {
+    /// Writes `self` into the given [`SMCVal`].
     fn into_smc(self, param: &mut SMCVal) -> Option<()>;
 }
 
+/// Conversion from an SMC value.
 pub trait FromSMC: Sized {
+    /// Constructs `Self` from the given [`SMCVal`].
     fn from_smc(param: SMCVal) -> Option<Self>;
 }
 
@@ -141,11 +145,13 @@ impl FromSMC for f32 {
     }
 }
 
+/// A `u8` constrained to `0..=10`.
 #[derive(Default, Clone, Copy)]
 #[repr(transparent)]
 pub struct UMax10(u8);
 
 impl UMax10 {
+    /// Creates a `UMax10` if `value <= 10`, otherwise returns `None`.
     pub const fn new(value: u8) -> Option<Self> {
         if value > 10 {
             None
@@ -154,6 +160,10 @@ impl UMax10 {
         }
     }
 
+    /// Creates a `UMax10` without checking that `value <= 10`.
+    ///
+    /// # Safety
+    /// The caller must ensure `value <= 10`.
     pub const unsafe fn new_unchecked(value: u8) -> Self {
         Self(value)
     }
@@ -196,6 +206,7 @@ impl fmt::Debug for UMax10 {
     }
 }
 
+/// Error type indicating a value exceeded the maximum of 10.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct GreaterThan10;
@@ -235,11 +246,13 @@ impl FromSMC for UMax10 {
     }
 }
 
+/// A `u8` constrained to `0..=9` (one decimal digit).
 #[derive(Default, Clone, Copy)]
 #[repr(transparent)]
 pub struct OneDigit(u8);
 
 impl OneDigit {
+    /// Creates a `OneDigit` if `value <= 9`, otherwise returns `None`.
     pub const fn new(value: u8) -> Option<Self> {
         if value > 9 {
             None
@@ -248,6 +261,10 @@ impl OneDigit {
         }
     }
 
+    /// Creates a `OneDigit` without checking that `value <= 9`.
+    ///
+    /// # Safety
+    /// The caller must ensure `value <= 9`.
     pub const unsafe fn new_unchecked(value: u8) -> Self {
         Self(value)
     }
@@ -290,6 +307,7 @@ impl fmt::Debug for OneDigit {
     }
 }
 
+/// Error type indicating a value has more digits than expected.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct MoreDigits;

@@ -6,11 +6,14 @@ use crate::{util, FromSMC, IntoSMC, OneDigit, Result, SMCError, UMax10, SMC};
 
 const TYPE_FAN: FourCharCode = fcc!("{fds");
 
+/// A single fan identified by its index.
+#[derive(Clone, Copy)]
 pub struct Fan {
     id: OneDigit,
     name: FanName,
 }
 
+/// Speed and management state of a fan.
 pub struct FanInfo {
     fan: Fan,
     min_speed: f32,
@@ -20,44 +23,53 @@ pub struct FanInfo {
 }
 
 impl Fan {
+    /// Returns the fan index.
     #[inline]
     pub fn id(&self) -> OneDigit {
         self.id
     }
 
+    /// Returns the fan name as a byte slice.
     #[inline]
     pub fn name(&self) -> &[u8] {
         &self.name
     }
 
+    /// Returns the minimum speed of this fan.
     #[inline]
     pub fn min_speed(&self, smc: &SMC) -> Result<f32> {
         smc.get_fan_min_speed(self.id())
     }
 
+    /// Returns the maximum speed of this fan.
     #[inline]
     pub fn max_speed(&self, smc: &SMC) -> Result<f32> {
         smc.get_fan_max_speed(self.id())
     }
 
+    /// Returns the current speed of this fan.
     #[inline]
     pub fn current_speed(&self, smc: &SMC) -> Result<f32> {
         smc.get_fan_current_speed(self.id())
     }
 
+    /// Returns whether the fan is under automatic control.
     #[inline]
     pub fn is_managed(&self, smc: &SMC) -> Result<bool> {
         is_managed(self, smc)
     }
 
+    /// Returns the fan speed in RPM.
     pub fn rpm(&self, smc: &SMC) -> Result<f32> {
         Ok(rpm(self.current_speed(smc)?, self.min_speed(smc)?))
     }
 
+    /// Sets whether this fan is under automatic (`true`) or manual (`false`) control.
     pub fn set_managed(&self, smc: &mut SMC, managed: bool) -> Result<()> {
         smc.fan_set_managed(self.id(), managed)
     }
 
+    /// Returns the fan speed as a percentage of its range.
     pub fn percent(&self, smc: &SMC) -> Result<f32> {
         Ok(percent(
             self.current_speed(smc)?,
@@ -66,17 +78,20 @@ impl Fan {
         ))
     }
 
+    /// Sets the minimum speed of this fan.
     pub fn set_min_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
         let max = self.max_speed(smc)?;
         set_min_speed(smc, self.id(), max, speed)
     }
 
+    /// Sets the current speed of this fan.
     pub fn set_current_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
         let min = self.min_speed(smc)?;
         let max = self.max_speed(smc)?;
         set_current_speed(smc, self.id(), min, max, speed)
     }
 
+    /// Fetches all fan data and returns a [`FanInfo`].
     pub fn into_info(self, smc: &SMC) -> Result<FanInfo> {
         let min_speed = self.min_speed(smc)?;
         let max_speed = self.max_speed(smc)?;
@@ -94,66 +109,79 @@ impl Fan {
 }
 
 impl FanInfo {
+    /// Returns the fan index.
     #[inline]
     pub fn id(&self) -> OneDigit {
         self.fan.id()
     }
 
+    /// Returns the fan name as a byte slice.
     #[inline]
     pub fn name(&self) -> &[u8] {
         self.fan.name()
     }
 
+    /// Returns the cached minimum speed.
     #[inline]
     pub fn min_speed(&self) -> f32 {
         self.min_speed
     }
 
+    /// Returns the cached maximum speed.
     #[inline]
     pub fn max_speed(&self) -> f32 {
         self.max_speed
     }
 
+    /// Returns the cached current speed.
     #[inline]
     pub fn current_speed(&self) -> f32 {
         self.current_speed
     }
 
+    /// Returns whether the fan is under automatic control.
     #[inline]
     pub fn is_managed(&self) -> bool {
         self.managed
     }
 
+    /// Returns the RPM calculated from cached speed values.
     #[inline]
     pub fn rpm(&self) -> f32 {
         rpm(self.current_speed(), self.min_speed())
     }
 
+    /// Returns the fan speed as a percentage using cached min/max/current.
     #[inline]
     pub fn percent(&self) -> f32 {
         percent(self.current_speed(), self.min_speed(), self.max_speed())
     }
 
+    /// Sets whether this fan is under automatic (`true`) or manual (`false`) control.
     #[inline]
     pub fn set_managed(&self, smc: &mut SMC, managed: bool) -> Result<()> {
         smc.fan_set_managed(self.id(), managed)
     }
 
+    /// Sets the minimum speed of this fan.
     #[inline]
     pub fn set_min_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
         set_min_speed(smc, self.id(), self.max_speed(), speed)
     }
 
+    /// Sets the current speed of this fan.
     #[inline]
     pub fn set_current_speed(&self, smc: &mut SMC, speed: f32) -> Result<()> {
         set_current_speed(smc, self.id(), self.min_speed(), self.max_speed(), speed)
     }
 
+    /// Consumes the info and returns the underlying [`Fan`].
     #[inline]
     pub fn into_fan(self) -> Fan {
         self.fan
     }
 
+    /// Re-fetches all fan data from the SMC.
     pub fn refresh(&mut self, smc: &SMC) -> Result<()> {
         self.min_speed = smc.get_fan_min_speed(self.id())?;
         self.max_speed = smc.get_fan_max_speed(self.id())?;
@@ -193,6 +221,7 @@ impl fmt::Debug for FanInfo {
 }
 
 // {fds type, the name of a fan
+#[derive(Clone, Copy)]
 struct FanName([u8; 32 - 4], usize);
 
 impl FromSMC for FanName {
@@ -254,6 +283,7 @@ fn rpm(current: f32, min: f32) -> f32 {
     rpm
 }
 
+/// Calculates fan speed as a percentage of the min-max range.
 pub fn percent(current: f32, min: f32, max: f32) -> f32 {
     let rpm = current - min;
     let rpm = if rpm < 0.0 { 0.0 } else { rpm };
@@ -283,6 +313,7 @@ mod __private {
 }
 use __private::CheckedSpeed;
 
+/// Writes the minimum speed for a fan to the SMC.
 pub fn set_min_speed(smc: &mut SMC, id: OneDigit, max: f32, speed: f32) -> Result<()> {
     if speed <= 0.0 || speed > max {
         Err(SMCError::TryInto)
@@ -296,6 +327,7 @@ pub fn set_min_speed(smc: &mut SMC, id: OneDigit, max: f32, speed: f32) -> Resul
     }
 }
 
+/// Writes the current/target speed for a fan to the SMC.
 pub fn set_current_speed(
     smc: &mut SMC,
     id: OneDigit,
@@ -321,32 +353,62 @@ impl SMC {
         self.read_key::<UMax10>(fcc!("FNum"))
     }
 
+    /// Returns the number of fans.
     pub fn fans_len(&self) -> Result<usize> {
         self._fans_len().map(|n| *n as usize)
     }
 
+    /// Returns the [`Fan`] for the given index.
+    #[cfg(not(target_arch = "aarch64"))]
     pub fn get_fan(&self, id: OneDigit) -> Result<Fan> {
         let key = fcc_format!("F{}ID", *id)?;
         self.read_key::<FanName>(key).map(|name| Fan { id, name })
     }
 
+    /// Returns the [`Fan`] for the given index.
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_fan(&self, id: OneDigit) -> Result<Fan> {
+        let len = self.fans_len()?;
+        if (*id as usize) < len {
+            let name = unsafe {
+                let mut buf = MaybeUninit::<[u8; 32 - 4]>::uninit();
+                let b = (*buf.as_mut_ptr()).as_mut_ptr();
+                *b = b'F';
+                *b.add(1) = b'a';
+                *b.add(2) = b'n';
+                *b.add(3) = b' ';
+                *b.add(4) = *id + b'0';
+                let buf = buf.assume_init();
+                FanName(buf, 5)
+            };
+            Ok(Fan { id, name })
+        } else {
+            Err(SMCError::KeyNotFound(fcc_format!("F{}ID", *id)?))
+        }
+    }
+
+    /// Returns the minimum speed of the fan at `id`.
     pub fn get_fan_min_speed(&self, id: OneDigit) -> Result<f32> {
         self.read_key(fcc_format!("F{}Mn", *id)?)
     }
 
+    /// Returns the maximum speed of the fan at `id`.
     pub fn get_fan_max_speed(&self, id: OneDigit) -> Result<f32> {
         self.read_key(fcc_format!("F{}Mx", *id)?)
     }
 
+    /// Returns the current speed of the fan at `id`.
     pub fn get_fan_current_speed(&self, id: OneDigit) -> Result<f32> {
         self.read_key(fcc_format!("F{}Ac", *id)?)
     }
 
+    /// Returns a [`FanInfo`] snapshot for the fan at `id`.
     pub fn get_fan_info(&self, id: OneDigit) -> Result<FanInfo> {
         self.get_fan(id)?.into_info(self)
     }
 
-    pub fn fans(&self) -> Result<Fans> {
+    /// Returns an iterator over all fans.
+    pub fn fans<'a>(&'a self) -> Result<Fans<'a>> {
         let len = *self._fans_len()?;
         Ok(Fans {
             smc: self,
@@ -355,17 +417,20 @@ impl SMC {
         })
     }
 
-    pub fn fan_infos(&self) -> Result<FanInfos> {
+    /// Returns an iterator over [`FanInfo`] snapshots.
+    pub fn fan_infos<'a>(&'a self) -> Result<FanInfos<'a>> {
         Ok(FanInfos {
             inner: self.fans()?,
         })
     }
 
+    /// Returns a bitmask of automatically managed fans.
     #[inline]
     pub fn managed_fans(&self) -> Result<u16> {
         self.read_key(fcc!("FS! "))
     }
 
+    /// Sets whether fan `id` is under automatic (`true`) or manual (`false`) control.
     pub fn fan_set_managed(&mut self, id: OneDigit, managed: bool) -> Result<()> {
         let bitmask = self.managed_fans()?;
         let mask = 1u16 << (*id as u16);
@@ -390,12 +455,14 @@ impl SMC {
     }
 }
 
+/// Iterator over all fans.
 pub struct Fans<'a> {
     smc: &'a SMC,
     pos: u8,
     len: u8,
 }
 
+/// Iterator over all fan info snapshots.
 pub struct FanInfos<'a> {
     inner: Fans<'a>,
 }

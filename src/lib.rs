@@ -1,5 +1,29 @@
 #![cfg(target_os = "macos")]
 #![cfg_attr(not(feature = "std"), no_std)]
+//! Read and write Apple System Management Controller (SMC) values on macOS.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use smc::SMC;
+//!
+//! let smc = SMC::new().unwrap();
+//!
+//! // Read CPU temperature (TC0P)
+//! let temp: f32 = smc.read_key(four_char_code!("TC0P")).unwrap();
+//! println!("CPU temp: {} °C", temp);
+//!
+//! // Check if optical disk drive is full
+//! if smc.is_optical_disk_drive_full().unwrap() {
+//!     println!("Optical disk drive is full (has media)");
+//! }
+//!
+//! // Enumerate fans
+//! for fan in smc.fans().unwrap() {
+//!     let fan = fan.unwrap();
+//!     println!("Fan {}: {} rpm", fan.id(), fan.rpm(&smc).unwrap());
+//! }
+//! ```
 
 use core::mem::MaybeUninit;
 
@@ -24,12 +48,16 @@ use crate::sys::{
     IOServiceMatching, IOServiceOpen,
 };
 
+/// Alias for `core::result::Result` with the crate's [`SMCError`](crate::SMCError).
 pub type Result<T> = core::result::Result<T, SMCError>;
 
 // "ch8*", "char", "flag", "flt ", "fp1f", "fp6a", "fp79", "fp88", "fpe2", "hex_", "si16", "si8 ", "sp1e", "sp2d", "sp3c", "sp4b", "sp5a", "sp69", "sp78", "sp87", "ui16", "ui32", "ui8 ", "{alc", "{ali", "{alp", "{alv", "{fds", "{hdi", "{lim", "{lkb", "{lks", "{mss", "{rev"
+/// Metadata for an SMC data type.
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub struct DataType {
+    /// The FourCharCode identifying the data type.
     pub id: FourCharCode,
+    /// Size of the data type in bytes.
     pub size: u32,
 }
 
@@ -99,38 +127,51 @@ struct SMCParam {
     pub bytes: [u8; 32],
 }
 
+/// A value read from or to be written to the SMC.
 #[derive(Default, Debug, Copy, Clone)]
 pub struct SMCVal {
+    /// The SMC data type (e.g. `ui16 `, `flt `, `sp78`).
     pub r#type: FourCharCode,
+    /// Number of meaningful bytes in `data`.
     size: usize,
+    /// Raw byte buffer for the SMC value.
     data: [u8; 32],
 }
 
 impl SMCVal {
+    /// Returns the number of meaningful bytes in the value.
     #[inline]
     pub fn len(&self) -> usize {
         self.size
     }
 
+    /// Returns `true` if the value contains zero meaningful bytes.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns a slice of the meaningful bytes in the value.
     #[inline]
     pub fn data(&self) -> &[u8] {
         unsafe { self.data.get_unchecked(..self.size) }
     }
 
+    /// Returns a mutable slice of the meaningful bytes in the value.
     #[inline]
     pub fn data_mut(&mut self) -> &mut [u8] {
         unsafe { self.data.get_unchecked_mut(..self.size) }
     }
 }
 
+/// Handle to the SMC driver connection.
 pub struct SMC(io_connect_t);
 
 impl SMC {
+    /// Opens a connection to the AppleSMC driver.
+    ///
+    /// Returns `DriverNotFound` if the SMC service is unavailable,
+    /// or `Open` if the IOKit connection fails.
     pub fn new() -> Result<Self> {
         unsafe {
             let device = IOServiceGetMatchingService(
@@ -178,6 +219,7 @@ impl SMC {
         }
     }
 
+    /// Returns the [`DataType`] metadata for the given key.
     pub fn key_info(&self, key: FourCharCode) -> Result<DataType> {
         let mut output = unsafe {
             self.call_driver(&SMCParam {
@@ -214,7 +256,7 @@ impl SMC {
             }
         };
 
-        T::from_smc(val).map_or(Err(SMCError::TryFrom(val)), Ok)
+        T::from_smc(val).ok_or(SMCError::TryFrom(val))
     }
 
     fn write_data<T>(&mut self, key: SMCKey, val: T) -> Result<()>
@@ -245,6 +287,7 @@ impl SMC {
         Ok(())
     }
 
+    /// Reads and deserialises the value of an SMC key.
     pub fn read_key<T>(&self, key: FourCharCode) -> Result<T>
     where
         T: FromSMC,
@@ -256,6 +299,11 @@ impl SMC {
         })
     }
 
+    /// Serialises and writes a value to an SMC key.
+    ///
+    /// # Safety
+    /// Writing to the SMC can affect system behaviour. Ensure the key and
+    /// value are appropriate for your hardware.
     pub unsafe fn write_key<T>(&mut self, key: FourCharCode, val: T) -> Result<()>
     where
         T: IntoSMC,
@@ -270,6 +318,9 @@ impl SMC {
         )
     }
 
+    /// Returns the `FourCharCode` of the key at the given index.
+    ///
+    /// Used to enumerate all SMC keys by iterating `0..`.
     pub fn get_key(&self, index: u32) -> Result<FourCharCode> {
         unsafe {
             self.call_driver(&SMCParam {
@@ -284,6 +335,7 @@ impl SMC {
         }
     }
 
+    /// Convenience wrapper: reads the `MSDI` key (optical disk drive status).
     #[inline]
     pub fn is_optical_disk_drive_full(&self) -> Result<bool> {
         self.read_key(four_char_code!("MSDI"))

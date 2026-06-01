@@ -7,12 +7,14 @@ impl SMC {
         self.read_key::<u32>(fcc!("#KEY"))
     }
 
+    /// Returns the total number of SMC keys.
     #[inline]
     pub fn keys_len(&self) -> Result<usize> {
         self._keys_len().map(|n| n as usize)
     }
 
-    pub fn keys(&self) -> Result<Keys> {
+    /// Returns an iterator over all SMC keys.
+    pub fn keys<'a>(&'a self) -> Result<Keys<'a>> {
         let len = self._keys_len()?;
         Ok(Keys {
             smc: self,
@@ -22,6 +24,7 @@ impl SMC {
     }
 }
 
+/// Iterator over all SMC keys.
 pub struct Keys<'a> {
     smc: &'a SMC,
     len: u32,
