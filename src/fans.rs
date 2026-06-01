@@ -625,3 +625,150 @@ impl<'a> DoubleEndedIterator for FanInfos<'a> {
             .map(|o| o.and_then(|fan| fan.into_info(self.inner.smc())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SMCVal, TYPE_FLAG};
+    use four_char_code::FourCharCode;
+
+    fn make_val(r#type: FourCharCode, data: &[u8]) -> SMCVal {
+        let mut val = SMCVal { r#type, size: data.len(), data: [0; 32] };
+        val.data[..data.len()].copy_from_slice(data);
+        val
+    }
+
+    mod rpm {
+        use super::*;
+
+        #[test]
+        fn normal() {
+            assert_eq!(rpm(100.0, 50.0), 50.0);
+        }
+
+        #[test]
+        fn current_equals_min() {
+            assert_eq!(rpm(50.0, 50.0), 0.0);
+        }
+
+        #[test]
+        fn current_below_min_clamps_to_zero() {
+            assert_eq!(rpm(30.0, 50.0), 0.0);
+        }
+
+        #[test]
+        fn both_zero() {
+            assert_eq!(rpm(0.0, 0.0), 0.0);
+        }
+
+        #[test]
+        fn current_zero_min_positive() {
+            assert_eq!(rpm(0.0, 100.0), 0.0);
+        }
+    }
+
+    mod percent_fn {
+        use super::*;
+
+        #[test]
+        fn fifty_percent() {
+            let p = percent(50.0, 0.0, 100.0);
+            assert!((p - 50.0).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn zero_percent() {
+            assert_eq!(percent(0.0, 0.0, 100.0), 0.0);
+        }
+
+        #[test]
+        fn hundred_percent() {
+            let p = percent(100.0, 0.0, 100.0);
+            assert!((p - 100.0).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn above_hundred() {
+            let p = percent(150.0, 0.0, 100.0);
+            assert!((p - 150.0).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn current_below_min_clamps() {
+            assert_eq!(percent(-10.0, 0.0, 100.0), 0.0);
+        }
+
+        #[test]
+        fn non_zero_min() {
+            let p = percent(75.0, 50.0, 100.0);
+            assert!((p - 50.0).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn min_equals_max() {
+            let p = percent(50.0, 50.0, 50.0);
+            assert!(p.is_nan());
+        }
+
+        #[test]
+        fn all_zero() {
+            let p = percent(0.0, 0.0, 0.0);
+            assert!(p.is_nan());
+        }
+    }
+
+    mod fan_name {
+        use super::*;
+
+        #[test]
+        fn valid_name() {
+            let mut data = [0u8; 28 + 4];
+            data[4..10].copy_from_slice(b"Fan 0\0");
+            let v = make_val(TYPE_FAN, &data);
+            let name = FanName::from_smc(v).unwrap();
+            assert_eq!(&*name, b"Fan 0");
+        }
+
+        #[test]
+        fn empty_name() {
+            let mut data = [0u8; 28 + 4];
+            data[4] = 0;
+            let v = make_val(TYPE_FAN, &data);
+            let name = FanName::from_smc(v).unwrap();
+            assert_eq!(&*name, b"");
+        }
+
+        #[test]
+        fn name_without_trailing_null() {
+            let mut data = [0u8; 28 + 4];
+            data[4..10].copy_from_slice(b"Fan 01");
+            let v = make_val(TYPE_FAN, &data);
+            let name = FanName::from_smc(v).unwrap();
+            assert_eq!(&*name, b"Fan 01");
+        }
+
+        #[test]
+        fn long_name() {
+            let mut data = [0u8; 28 + 4];
+            let name = b"Exhaust Fan Behind Monitor";
+            data[4..4 + name.len()].copy_from_slice(name);
+            let v = make_val(TYPE_FAN, &data);
+            let fan_name = FanName::from_smc(v).unwrap();
+            assert_eq!(&*fan_name, &name[..]);
+        }
+
+        #[test]
+        fn wrong_type() {
+            let data = [0u8; 28 + 4];
+            let v = make_val(TYPE_FLAG, &data);
+            assert!(FanName::from_smc(v).is_none());
+        }
+
+        #[test]
+        fn too_short() {
+            let v = make_val(TYPE_FAN, &[0, 0, 0]);
+            assert!(FanName::from_smc(v).is_none());
+        }
+    }
+
+}

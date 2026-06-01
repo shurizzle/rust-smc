@@ -31,9 +31,10 @@ pub fn write_f32(n: f32, val: &mut SMCVal) -> Option<()> {
             Some(())
         }
         (TYPE_FLT, 4) => {
+            // SMC stores flt in native byte order (LE on all Macs)
             unsafe {
                 core::ptr::copy_nonoverlapping(
-                    n.to_be_bytes().as_ptr(),
+                    n.to_ne_bytes().as_ptr(),
                     val.data_mut().as_mut_ptr(),
                     4,
                 )
@@ -139,5 +140,294 @@ pub fn write_bool(n: bool, val: &mut SMCVal) -> Option<()> {
             Some(())
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FromSMC;
+    use four_char_code::FourCharCode;
+
+    fn make_val(r#type: FourCharCode, data: &[u8]) -> SMCVal {
+        let mut val = SMCVal { r#type, size: data.len(), data: [0; 32] };
+        val.data[..data.len()].copy_from_slice(data);
+        val
+    }
+
+    fn read_val(val: &SMCVal) -> &[u8] {
+        &val.data[..val.size]
+    }
+
+    mod write_f32 {
+        use super::*;
+
+        #[test]
+        fn fpe2_normal() {
+            let mut v = make_val(TYPE_FPE2, &[0, 0]);
+            assert!(write_f32(25.5, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x66]);
+        }
+
+        #[test]
+        fn fpe2_zero() {
+            let mut v = make_val(TYPE_FPE2, &[0, 0]);
+            assert!(write_f32(0.0, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00]);
+        }
+
+        #[test]
+        fn fpe2_negative_rejected() {
+            let mut v = make_val(TYPE_FPE2, &[0, 0]);
+            assert!(write_f32(-1.0, &mut v).is_none());
+        }
+
+        #[test]
+        fn sp78_normal() {
+            let mut v = make_val(TYPE_SP78, &[0, 0]);
+            assert!(write_f32(25.5, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x19, 0x80]);
+        }
+
+        #[test]
+        fn sp78_negative() {
+            let mut v = make_val(TYPE_SP78, &[0, 0]);
+            assert!(write_f32(-1.0, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xFF, 0x00]);
+        }
+
+        #[test]
+        fn flt_normal() {
+            // SMC stores flt in native byte order (LE on all Macs)
+            let mut v = make_val(TYPE_FLT, &[0, 0, 0, 0]);
+            assert!(write_f32(1.5, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00, 0xC0, 0x3F]);
+        }
+
+        #[test]
+        fn flt_negative() {
+            let mut v = make_val(TYPE_FLT, &[0, 0, 0, 0]);
+            assert!(write_f32(-1.5, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00, 0xC0, 0xBF]);
+        }
+
+        #[test]
+        fn flt_zero() {
+            let mut v = make_val(TYPE_FLT, &[0, 0, 0, 0]);
+            assert!(write_f32(0.0, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00, 0x00, 0x00]);
+        }
+
+        #[test]
+        fn wrong_type() {
+            let mut v = make_val(TYPE_U16, &[0, 0]);
+            assert!(write_f32(1.0, &mut v).is_none());
+        }
+
+        #[test]
+        fn wrong_size() {
+            let mut v = make_val(TYPE_FPE2, &[0, 0, 0]);
+            assert!(write_f32(1.0, &mut v).is_none());
+        }
+    }
+
+    mod write_u32 {
+        use super::*;
+
+        #[test]
+        fn normal() {
+            let mut v = make_val(TYPE_U32, &[0, 0, 0, 0]);
+            assert!(write_u32(0xDEAD_BEEF, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xDE, 0xAD, 0xBE, 0xEF]);
+        }
+
+        #[test]
+        fn zero() {
+            let mut v = make_val(TYPE_U32, &[0, 0, 0, 0]);
+            assert!(write_u32(0, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0, 0, 0, 0]);
+        }
+
+        #[test]
+        fn wrong_type() {
+            let mut v = make_val(TYPE_U16, &[0, 0]);
+            assert!(write_u32(42, &mut v).is_none());
+        }
+    }
+
+    mod write_i32 {
+        use super::*;
+
+        #[test]
+        fn positive() {
+            let mut v = make_val(TYPE_I32, &[0, 0, 0, 0]);
+            assert!(write_i32(42, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00, 0x00, 0x2A]);
+        }
+
+        #[test]
+        fn negative() {
+            let mut v = make_val(TYPE_I32, &[0, 0, 0, 0]);
+            assert!(write_i32(-2, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xFF, 0xFF, 0xFF, 0xFE]);
+        }
+    }
+
+    mod write_u16 {
+        use super::*;
+
+        #[test]
+        fn direct() {
+            let mut v = make_val(TYPE_U16, &[0, 0]);
+            assert!(write_u16(0x0102, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x01, 0x02]);
+        }
+
+        #[test]
+        fn widened_to_u32() {
+            let mut v = make_val(TYPE_U32, &[0, 0, 0, 0]);
+            assert!(write_u16(0x0102, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00, 0x01, 0x02]);
+        }
+
+        #[test]
+        fn widened_to_i32() {
+            let mut v = make_val(TYPE_I32, &[0, 0, 0, 0]);
+            assert!(write_u16(0x0102, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x00, 0x01, 0x02]);
+        }
+
+        #[test]
+        fn wrong_type() {
+            let mut v = make_val(TYPE_FLAG, &[0]);
+            assert!(write_u16(42, &mut v).is_none());
+        }
+    }
+
+    mod write_i16 {
+        use super::*;
+
+        #[test]
+        fn direct_positive() {
+            let mut v = make_val(TYPE_I16, &[0, 0]);
+            assert!(write_i16(42, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x2A]);
+        }
+
+        #[test]
+        fn direct_negative() {
+            let mut v = make_val(TYPE_I16, &[0, 0]);
+            assert!(write_i16(-2, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xFF, 0xFE]);
+        }
+
+        #[test]
+        fn widened_to_i32() {
+            let mut v = make_val(TYPE_I32, &[0, 0, 0, 0]);
+            assert!(write_i16(-2, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xFF, 0xFF, 0xFF, 0xFE]);
+        }
+    }
+
+    mod write_u8 {
+        use super::*;
+
+        #[test]
+        fn direct() {
+            let mut v = make_val(TYPE_U8, &[0]);
+            assert!(write_u8(42, &mut v).is_some());
+            assert_eq!(read_val(&v), &[42]);
+        }
+
+        #[test]
+        fn widened_to_i16() {
+            let mut v = make_val(TYPE_I16, &[0, 0]);
+            assert!(write_u8(42, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x2A]);
+        }
+
+        #[test]
+        fn widened_to_u16() {
+            let mut v = make_val(TYPE_U16, &[0, 0]);
+            assert!(write_u8(42, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0x00, 0x2A]);
+        }
+    }
+
+    mod write_i8 {
+        use super::*;
+
+        #[test]
+        fn direct_positive() {
+            let mut v = make_val(TYPE_I8, &[0]);
+            assert!(write_i8(42, &mut v).is_some());
+            assert_eq!(read_val(&v), &[42]);
+        }
+
+        #[test]
+        fn direct_negative() {
+            let mut v = make_val(TYPE_I8, &[0]);
+            assert!(write_i8(-2, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xFE]);
+        }
+
+        #[test]
+        fn widened_to_i16() {
+            let mut v = make_val(TYPE_I16, &[0, 0]);
+            assert!(write_i8(-2, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0xFF, 0xFE]);
+        }
+    }
+
+    mod write_bool {
+        use super::*;
+
+        #[test]
+        fn true_() {
+            let mut v = make_val(TYPE_FLAG, &[0]);
+            assert!(write_bool(true, &mut v).is_some());
+            assert_eq!(read_val(&v), &[1]);
+        }
+
+        #[test]
+        fn false_() {
+            let mut v = make_val(TYPE_FLAG, &[1]);
+            assert!(write_bool(false, &mut v).is_some());
+            assert_eq!(read_val(&v), &[0]);
+        }
+
+        #[test]
+        fn wrong_type() {
+            let mut v = make_val(TYPE_U8, &[0]);
+            assert!(write_bool(true, &mut v).is_none());
+        }
+    }
+
+    mod roundtrip {
+        use super::*;
+
+        #[test]
+        fn fpe2_u16_roundtrip() {
+            let mut v = make_val(TYPE_FPE2, &[0, 0]);
+            assert!(write_f32(25.5, &mut v).is_some());
+            let result = u16::from_be_bytes([v.data[0], v.data[1]]);
+            assert_eq!(result, 102);
+        }
+
+        #[test]
+        fn sp78_i16_roundtrip() {
+            let mut v = make_val(TYPE_SP78, &[0, 0]);
+            assert!(write_f32(-1.0, &mut v).is_some());
+            let result = i16::from_be_bytes([v.data[0], v.data[1]]);
+            assert_eq!(result, -256);
+        }
+
+        #[test]
+        fn flag_roundtrip() {
+            let mut v = make_val(TYPE_FLAG, &[0]);
+            assert!(write_bool(true, &mut v).is_some());
+            let read_back = bool::from_smc(v);
+            assert_eq!(read_back, Some(true));
+        }
     }
 }

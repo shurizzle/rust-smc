@@ -5,6 +5,7 @@
 //! # Example
 //!
 //! ```no_run
+//! use four_char_code::four_char_code;
 //! use smc::SMC;
 //!
 //! let smc = SMC::new().unwrap();
@@ -24,6 +25,9 @@
 //!     println!("Fan {}: {} rpm", fan.id(), fan.rpm(&smc).unwrap());
 //! }
 //! ```
+
+#[cfg(test)]
+extern crate std;
 
 use core::mem::MaybeUninit;
 
@@ -133,9 +137,9 @@ pub struct SMCVal {
     /// The SMC data type (e.g. `ui16 `, `flt `, `sp78`).
     pub r#type: FourCharCode,
     /// Number of meaningful bytes in `data`.
-    size: usize,
+    pub(crate) size: usize,
     /// Raw byte buffer for the SMC value.
-    data: [u8; 32],
+    pub(crate) data: [u8; 32],
 }
 
 impl SMCVal {
